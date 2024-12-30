@@ -1,4 +1,7 @@
 library(shiny)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
 library(bslib)
 
 # constants
@@ -85,6 +88,17 @@ option_gamma <- function(S, K, time, r, vol) {
     d1 = (log(S/K) + (r + 0.5*vol^2)*time) / (vol*sqrt(time))
     return(dnorm(d1) / (S*vol*sqrt(time)))
 }
+
+# return a tibble with the option price, delta and gamma
+option_info <- function(S, K, time, r, vol, type = "call",direction = "long") {
+    tibble(
+        Price = b_s_option_val(S, K, time, r, vol, type),
+        Delta = option_delta(S, K, time, r, vol, type),
+        Gamma = option_gamma(S, K, time, r, vol)) %>%
+      mutate(across(everything(),\(x) if_else(direction == "short",-x,x))) %>% 
+      pivot_longer(cols = everything(), names_to = "Metric", values_to = "Value")
+}
+
 #  date sequence of third friday of each month from 2025 to 2029
 third_friday <- function(year) {
     # create a sequence of dates for the third friday of each month
@@ -105,9 +119,9 @@ third_friday <- function(year) {
     return(reduce(dates,.f = c))
 }
 
-option_expiries <- sort(third_friday(2025:2029)) |> 
-    # remove dates not in future
-    keep(\(x)x > Sys.Date())
+option_expiries <- sort(third_friday(2024:2029)) %>% 
+    # remove dates not in future using base R
+    (function(x) x[x > Sys.Date()])
 
 #  option_expiries closest to warrant_expiry
 closest_expiry <- which.min(abs(as.numeric(option_expiries - warrant_expiry)))
@@ -185,22 +199,24 @@ ui <- page_sidebar(
     # Show a plot of the generated distribution
     card(
         title = "Option Value vs. Underlying Price",
-        card(card_header("Click on Plot to Update Trade Value"),
-             layout_columns(
-                 value_box("Stock Price", value = textOutput("stock_price")),
-                 value_box("Option Values", value = verbatimTextOutput("call_info"))
-                 )
-             ),
         card(
-            sliderInput(
-                    "stock_price",
-                    "Stock Price:",
-                    min = 0,
-                    max = UL,
-                    step = 0.1,
-                    value = warrant_strike,
-                    width = "100%"
-            ),
+           sliderInput(
+              "stock_price",
+              "Stock Price:",
+              min = 0,
+              max = UL,
+              step = 0.1,
+              value = warrant_strike,
+              width = "100%"
+           ),
+           card(
+             layout_columns(
+                fill = FALSE,
+                value_box(theme = "green","Warrant", p(tableOutput("warrant_info"))),
+                value_box(theme = "pink","Call", p(tableOutput("call_info"))),
+                value_box(theme = "blue","Net", p(tableOutput("net_info"))),
+             )
+             ),
         plotOutput("optPlot"))
     )
 )
@@ -213,10 +229,10 @@ server <- function(input, output,session) {
     })
     
     observe({
-        x <- as.numeric(difftime(min(input$expiry_date, warrant_expiry),
-                                 Sys.Date(),
-                                 units = "days"))/365
-            
+       x <- round(as.numeric(difftime(
+          min(input$expiry_date, warrant_expiry), Sys.Date(), units = "days")
+          ) / 365,2)
+       
         updateSliderInput(
             session,
             "time_to_expiry",
@@ -280,31 +296,36 @@ server <- function(input, output,session) {
         
     })
 
-    output$call_info <- renderText({
-        px <- b_s_option_val(
-            S = input$stock_price,
-            K = input$call_strike,
-            time = input$time_to_expiry,
-            r = RF,
-            vol = input$call_vol/100,
-            type = "call")
-        delta <- option_delta(
-            S = input$stock_price,
-            K = input$call_strike,
-            time = input$time_to_expiry,
-            r = RF,
-            vol = input$call_vol/100,
-            type = "call")
-        gamma <- option_gamma(
-            S = input$stock_price,
-            K = input$call_strike,
-            time = input$time_to_expiry,
-            r = RF,
-            vol = input$call_vol/100)
-        paste0("Option Value: ", round(px,2), "\n",
-                    "Delta: ", round(delta,2), "\n",
-                    "Gamma: ", round(gamma,2))
-        
+    values_position <- reactive({
+       call = option_info(
+          S = input$stock_price,
+          K = input$call_strike,
+          time = input$time_to_expiry,
+          r = RF,
+          vol = input$call_vol/100,
+          type = "call",
+          direction = "short") %>% 
+          rename("Call" = "Value")
+       warrant = option_info(
+          S = input$stock_price,
+          K = warrant_strike,
+          time = input$time_to_expiry,
+          r = RF,
+          vol = input$warrant_vol/100,
+          type = "call") %>% 
+          rename("Warrant" = "Value")
+       left_join(call, warrant, by = "Metric") %>% 
+          mutate("Net" = Call + Warrant)
+    })
+    
+    output$call_info <- renderTable({
+       values_position()[,c("Metric","Call")]
+    })
+    output$warrant_info <-renderTable({
+       values_position()[,c("Metric","Warrant")]
+    })
+    output$net_info <-renderTable({
+       values_position()[,c("Metric","Net")]
     })
 }
 
