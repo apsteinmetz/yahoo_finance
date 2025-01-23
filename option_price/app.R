@@ -127,88 +127,95 @@ option_expiries <- sort(third_friday(2024:2029)) %>%
 closest_expiry <- which.min(abs(as.numeric(option_expiries - warrant_expiry)))
 
 # Define UI for application that draws a histogram
-ui <- page_sidebar(
-    title = "Trade Value",
-    
-    # Sidebar with a slider input for number of bins
-    sidebar = sidebar(
-        card(
-            card_header("Option Parameters"),
-            selectInput(
-                "expiry_date",
-                "Expiry Date:",
-                choices = option_expiries,
-                selected = option_expiries[closest_expiry]
-            ),
-            sliderInput(
-                "call_strike",
-                "Call Strike:",
-                min = 0,
-                max = 20,
-                value = 10,
-                step = 0.5
-            ),
-            sliderInput(
-                "call_vol",
-                "Call Vol:",
-                min = 0,
-                max = 200,
-                value = 50
-            )
-            
-        ),
-        card(
-            card_header("Warrant Parameters"),
-            sliderInput(
-                "warrant_vol",
-                "Warrant Vol:",
-                min = 0,
-                max = 200,
-                value = 50
-            )
-        ),
-        card(
-            card_header("Trade Parameters"),
-            sliderInput(
-                "time_to_expiry",
-                "Time to Expiry (years):",
-                min = 0,
-                max = 3,
-                round = -2,
-                value = 2,
-                step = .01
-            ),
-            numericInput(
-                "call_trade_price",
-                "Call Sale Price:",
-                min = 0,
-                max = 20,
-                value = 10,
-                step = 0.5
-            ),
-            numericInput(
-                "warrant_trade_price",
-                "Warrant Buy Price:",
-                min = 0,
-                max = 20,
-                value = 10,
-                step = 0.5
-            )
-        )
+# Sidebar with a slider input for number of bins
+option_sidebar = sidebar(
+  card(
+    card_header("Option Parameters"),
+    selectInput(
+      "expiry_date",
+      "Expiry Date:",
+      choices = option_expiries,
+      selected = option_expiries[closest_expiry]
     ),
+    sliderInput(
+      "call_strike",
+      "Call Strike:",
+      min = 0,
+      max = 20,
+      value = 10,
+      step = 0.5
+    ),
+    sliderInput(
+      "call_vol",
+      "Call Vol:",
+      min = 0,
+      max = 200,
+      value = 50
+    )
+    
+  ),
+  card(
+    card_header("Warrant Parameters"),
+    sliderInput(
+      "warrant_vol",
+      "Warrant Vol:",
+      min = 0,
+      max = 200,
+      value = 50
+    )
+  ),
+  card(
+    card_header("Trade Parameters"),
+    sliderInput(
+      "time_to_expiry",
+      "Time to Expiry (years):",
+      min = 0,
+      max = 3,
+      round = -2,
+      value = 2,
+      step = .01
+    ),
+    numericInput(
+      "call_trade_price",
+      "Call Sale Price:",
+      min = 0,
+      max = 20,
+      value = 10,
+      step = 0.5
+    ),
+    numericInput(
+      "warrant_trade_price",
+      "Warrant Buy Price:",
+      min = 0,
+      max = 20,
+      value = 10,
+      step = 0.5
+    )
+  )
+)
+
+ui <- page_sidebar(
+  input_dark_mode(),
+  theme = bs_theme(preset = "shiny"),
+    # title = "Trade Value",
+    sidebar = option_sidebar,
     # Show a plot of the generated distribution
     card(
         title = "Option Value vs. Underlying Price",
         card(
-           sliderInput(
-              "stock_price",
-              "Stock Price:",
-              min = 0,
-              max = UL,
-              step = 0.1,
-              value = warrant_strike,
-              width = "100%"
-           ),
+           # sliderInput(
+           #    "stock_price",
+           #    "Stock Price:",
+           #    min = 0,
+           #    max = UL,
+           #    step = 0.1,
+           #    value = warrant_strike,
+           #    width = "100%"
+          value_box(
+            theme = "purple",
+            title = "Stock Price",
+            value = textOutput("stock_px"),
+            "Click on Plot to Change"),
            card(
              layout_columns(
                 fill = FALSE,
@@ -217,7 +224,8 @@ ui <- page_sidebar(
                 value_box(theme = "blue","Net", p(tableOutput("net_info"))),
              )
              ),
-        plotOutput("optPlot"))
+        plotOutput("optPlot", click = "plot_click")
+        )
     )
 )
 
@@ -227,7 +235,13 @@ server <- function(input, output,session) {
     last_date <- reactive({
         min(input$expiry_date, warrant_expiry)
     })
-    
+    stock_px_from_click <- reactiveVal(warrant_strike)
+    observeEvent(input$plot_click$x, {
+      ifelse(is.null(input$plot_click),
+             stock_px_from_click(),
+             input$plot_click$x) |>
+        stock_px_from_click()
+    })
     observe({
        x <- round(as.numeric(difftime(
           min(input$expiry_date, warrant_expiry), Sys.Date(), units = "days")
@@ -280,7 +294,7 @@ server <- function(input, output,session) {
             geom_vline(xintercept = input$call_strike, linetype = "dashed",color = "darkblue") +
             annotate("text", x = input$call_strike, y = 10, label = "Call Strike Price") +
             geom_vline(xintercept = warrant_strike, linetype = "dashed",color = "red") +
-            geom_vline(xintercept = input$stock_price, ,color = "#007bc2",linewidth = 1) +
+            geom_vline(xintercept = stock_px_from_click(), ,color = "#007bc2",linewidth = 1) +
             annotate("text", x = warrant_strike, y = 8, label = "Warrant Exercise Price") +
             # label each line with the corresponding volatility
             annotate("text", x = 5, y = 10, label = "Call Option", color = "darkblue") +
@@ -298,7 +312,7 @@ server <- function(input, output,session) {
 
     values_position <- reactive({
        call = option_info(
-          S = input$stock_price,
+          S = stock_px_from_click(),
           K = input$call_strike,
           time = input$time_to_expiry,
           r = RF,
@@ -307,7 +321,7 @@ server <- function(input, output,session) {
           direction = "short") %>% 
           rename("Call" = "Value")
        warrant = option_info(
-          S = input$stock_price,
+          S = stock_px_from_click(),
           K = warrant_strike,
           time = input$time_to_expiry,
           r = RF,
@@ -326,6 +340,9 @@ server <- function(input, output,session) {
     })
     output$net_info <-renderTable({
        values_position()[,c("Metric","Net")]
+    })
+    output$stock_px <- renderText({
+        round(stock_px_from_click(),2)
     })
 }
 
