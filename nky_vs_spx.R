@@ -1,40 +1,93 @@
-library(tidyverse)
-# download stock data from yahoo finance
-library(quantmod)
-getSymbols(c("EWJ","HEWJ","SPY"),src = "yahoo")
+# analyze spac warrants
+# load library or install package if library not present
+if (!require("tidyverse")) install.packages("tidyverse")
+# stock retrieval
+if (!require("quantmod")) install.packages("quantmod")
+if (!require("googlesheets4")) install.packages("googlesheets4")
 
-# turn closing prices into a single tibble
-prices = cbind(Cl(EWJ),Cl(HEWJ),Cl(SPY)) %>% 
-   as_tibble(rownames = "date") |> 
-   mutate(date = as.Date(date)) |> 
-   pivot_longer(cols = -1, names_to = "ticker", values_to = "price") |> 
-   mutate(ticker = str_remove(ticker,"\\.Close")) |> 
-   group_by(ticker) |>
-   mutate(daily_return = price/lag(price)-1)
+# load spreadsheets from google sheets -----------------------------------------
+spac_tickers <- "https://docs.google.com/spreadsheets/d/1gXte0S4lFURNwDtz6FGUxIeIz2bUP3RZmYKh33-N7N8/edit?usp=sharing"
+# set to deauth since we don't need a password to get this
+gs4_deauth()
+ticker_sheet <- read_sheet(spac_tickers)
 
-prices
+# get stock/warrant prices for all available dates
+# Current src methods available are: yahoo, MySQL, FRED, csv, RData, oanda, and av.
+tickers <- ticker_sheet$ticker
+tickers
 
 
-# create index of value
-start_date = as.Date("2024-01-01")
-#start_date = Sys.Date()-365
-index = prices %>% 
-   # replace NA in daily return with 0
-   mutate(daily_return = ifelse(is.na(daily_return),0,daily_return)) |>
-   arrange(ticker,date) |>
-   filter(date >= start_date) |> 
-   group_by(ticker) |> 
-   mutate(value = 100*cumprod(1+daily_return))
+fix_column_names <- 
 
-index |> 
-   ggplot(aes(x = date, y = value, color = ticker)) + 
-   # add line for each ticker with thicker line
-   geom_line(size = 1) +
-   # annotate last point with value
-   geom_text(data = filter(index,date == max(date)), 
-             aes(label = round(value,2)), hjust = 1.2, vjust = 0) +
-   labs(title = "YTD Performance of SPY,\nEWJ (Japan ETF) and HEWJ (Hedged Japan ETF)",
-        x = "Date",
-        y = "Index Value") +
-   theme_minimal()
+prices <- ticker_sheet$ticker |> 
+   map(~getSymbols(.x, src = "yahoo", auto.assign = FALSE))
+
+prices |> 
+   map(as_tibble, rownames = "date") |> 
+   map(select, date, contains("Adjusted")) |> 
+   map(~rename_with(., ~str_remove(., "\\.[A-Za-z]+\\.Adjusted"))) |> 
+   map2(tickers, ~mutate(.x, ticker = .y))
+
+
+# Here's the corrected and simplified version that should work:
+
+#```r
+prices <- ticker_sheet$ticker |> 
+  map(~getSymbols(.x, src = "yahoo", auto.assign = FALSE)) |> 
+  map(as_tibble, rownames = "date") |> 
+  map(select, date, contains("Adjusted")) |> 
+  map(~rename_with(., ~str_remove(., "\\.[A-Za-z]+\\.Adjusted"))) |> 
+  map2(tickers, ~mutate(.x, ticker = .y)) |> 
+  reduce(bind_rows) |> 
+  mutate(date = as.Date(date))
+
+ggplot(prices, aes(x = date, y = Adjusted, color = ticker)) +
+  geom_line() +
+  labs(title = "SPAC Warrant Prices",
+       x = "Date",
+       y = "Price") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  facet_wrap(~ticker, scales = "free_y")
+#```
+
+
+
+
+
+
+
+
+prices <- ticker_sheet$ticker |> 
+  map(~getSymbols(.x, src = "yahoo", auto.assign = FALSE))
+
+
+
+temp <- prices |> 
+   map(as_tibble,rownames = "date") |> 
+   map(select, date, contains("Adjusted"))
+   map(select, date, contains("Adjusted")) |> 
+   map(mutate,date = as.Date(date)) |> 
+   map(\(x) rename_with(x,str_remove(x, "\\.[A-Za-z]+\\.Adjusted"), contains("Adjusted")))
+
+
+  map(~rename(., close = close)) |> 
+  map(~mutate(ticker = .x)) |> 
+  reduce(bind_rows)
+
+
+|> 
+  ggplot(aes(x = date, y = close, color = ticker)) +
+  geom_line() +
+  labs(title = "SPAC Warrant Prices",
+       x = "Date",
+       y = "Price") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::dollar) +
+  scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  facet_wrap(~ticker, scales = "free_y")
+
 
