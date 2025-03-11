@@ -23,7 +23,8 @@ tickers <- ticker_sheet$ticker
 tickers
 
 
-# download prices and combine into a list
+# download prices and combine into a list. Keep only the adjusted price.
+# By default getSymbols gets all available dates
 prices_raw <- ticker_sheet$ticker |> 
    map(~getSymbols(.x, src = "yahoo", auto.assign = FALSE)) |> 
    map(as_tibble, rownames = "date") |> 
@@ -32,9 +33,11 @@ prices_raw <- ticker_sheet$ticker |>
 # convert the list of ticker prices to a single tidy data frame
 prices <- prices_raw |> 
    map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
+   # use column names to make a ticker column
    map2(tickers, ~mutate(.x, ticker = .y)) |>
    # convert date to date
    map(~mutate(.x, date = as.Date(date))) |> 
+   # combine the list of data frames into one
    reduce(full_join, by = c("date", "ticker")) |> 
    pivot_longer(cols = -c(date, ticker), names_to = "type", values_to = "price") |> 
    select(date, ticker,price) |> 
@@ -62,7 +65,7 @@ ggplot(aes(x = date, y = price, color = ticker)) +
 
 # now look at daycounts
 prices |> 
-   filter(type == "warrant") |>
+   # filter(type == "warrant") |>
    ggplot(aes(x = daycount, y = price, color = ticker)) +
    geom_line() +
    labs(title = "SPAC Warrant Prices",
