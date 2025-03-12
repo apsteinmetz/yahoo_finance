@@ -45,7 +45,12 @@ prices <- prices_raw |>
    # now add the metadata from our spreadsheet
    left_join(ticker_sheet) |> 
    # get daycount around ex-dates
-   mutate(.by=ticker,daycount = as.numeric(date - as.Date(warrant_ex_date)))
+   mutate(.by=ticker,daycount = as.numeric(date - as.Date(warrant_ex_date))) |> 
+   # the following is a bit of a hack to get the order of the tickers right
+   # so that the warrants appear below the common in the facet plot.
+   # Note this only works because we have an even number of tickers
+   arrange(type,date) |> 
+   mutate(ticker = as_factor(ticker))
    
 
 
@@ -65,13 +70,16 @@ ggplot(aes(x = date, y = price, color = ticker)) +
 
 # now look at daycounts
 prices |> 
-   # filter(type == "warrant") |>
    ggplot(aes(x = daycount, y = price, color = ticker)) +
    geom_line() +
    labs(title = "SPAC Warrant Prices",
-        x = "Days from Ex-Date",
+        x = "Days from Warrant Ex-Date",
         y = "Price") +
    theme_minimal() +
+   # add vertical line at zero
+   geom_vline(xintercept = 0, linetype = "dashed") +
    theme(legend.position = "none") +
    scale_y_continuous(labels = scales::dollar) +
+   # arrange facets in a specified order
    facet_wrap(~ticker, scales = "free_y")
+
