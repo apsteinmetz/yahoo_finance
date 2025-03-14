@@ -31,11 +31,13 @@ prices_raw <- ticker_sheet$ticker |>
    map(select, date, contains("Adjusted"))
 
 # convert the list of ticker prices to a single tidy data frame
+# the map functions lets us step through the list of data frames
+# and apply the same operations to each one
 prices <- prices_raw |> 
    map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
    # use column names to make a ticker column
    map2(tickers, ~mutate(.x, ticker = .y)) |>
-   # convert date to date
+   # convert date string to date type
    map(~mutate(.x, date = as.Date(date))) |> 
    # combine the list of data frames into one
    reduce(full_join, by = c("date", "ticker")) |> 
