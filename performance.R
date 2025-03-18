@@ -8,6 +8,7 @@ if (!require("quantmod")) install.packages("quantmod")
 if (!require("googlesheets4")) install.packages("googlesheets4")
 if (!require("showtext")) install.packages("showtext")
 if (!require("ggstream")) install.packages("ggstream")
+if (!require("treemap")) install.packages("treemap")
 # if (!require("glue")) install.packages("glue")
 
 # load spreadsheets from google sheets -----------------------------------------
@@ -146,7 +147,7 @@ title_pos$y <- start_y + (max(value_by_type$value) - start_y) / 2 * scale_fact
 # The error occurs because `geom_stream()` expects data for all groups (asset_type) to have the same number of rows, but your data has different date ranges for different assets. To fix this, you need to ensure all asset types have values for the same date range. Here's how to modify your data before plotting:
 
 value_by_type_aligned <- value_by_type |>
-  filter(date > as.Date("2020-03-15")) |>
+  # filter(date > as.Date("2020-03-15")) |>
   complete(
     date = seq.Date(min(date), max(date), by = "day"),
     asset_type = unique(asset_type),
@@ -178,7 +179,7 @@ annotate_title <- ggplot2::annotate(
   "text",
   x = title_pos$x,
   y = title_pos$y,
-  label = "Aggregated\nInvesment\nAssets",
+  label = "Aggregated\nInvestment\nAssets",
   hjust = 0,
   size = 15,
   lineheight = .9,
@@ -213,7 +214,46 @@ annotate_label <- function(index = 1) {
   return(ann)
 }
 
+
+verticals <- function(year = 2022) {
+  earliest <- value_by_type_aligned |>
+    filter(year(date) == year) |>
+    summarize(date=min(date)) |>
+    pull(date)
+  
+  y_pos <- value_by_type_aligned |>
+    filter(date == earliest) |>
+    summarize(values=sum(value)) |>
+    pull(values)
+  
+  year_date <- earliest
+  
+  ann <- list(
+    geom_segment(aes(x=year_date, xend=year_date, y=0, yend=y_pos * scale_fact*1.1), color="black"),
+    geom_point(aes(x=year_date, y=y_pos * scale_fact * 1.1), color="black"),
+    annotate("text", x=year_date, y=y_pos * scale_fact * 1.2,
+             label=paste0("$",as.character(round(y_pos/1000,3))," MM"),
+             hjust=0.5,
+             size=5,
+             lineheight=.8,
+             fontface="bold",
+             family=font2,
+             color="black")
+  )
+  
+  return(ann)
+}
+
+
+annotate_verticals <- function(years = 2022) {
+  ann <- years |> map(\(x) verticals(x)) |> unlist(recursive = FALSE)
+  return(ann)
+}
+
+
+# plot the full chart ----------------------------------------------------------
 value_by_type_aligned |>
+  filter(date > as.Date("2020-01-02")) |>
   ggplot(aes(
     x = date,
     y = value * scale_fact,
@@ -221,6 +261,7 @@ value_by_type_aligned |>
   )) +
   geom_area() +
   #geom_stream(true_range = "none")+
+  annotate_verticals(2020:2025) +
   annotate_title +
   # label_geoms +
   annotate_label(1) +
@@ -228,6 +269,7 @@ value_by_type_aligned |>
   annotate_label(3) +
   annotate_label(4) +
   annotate_label(5) +
+  
   labs(x = "", y = "") +
   #  theme_minimal() +
   #  theme(legend.position = "none") +
@@ -256,26 +298,16 @@ value_by_type_aligned |>
     legend.title = element_text(size = 10, color = txt_col),
     legend.position = "none",
     # panel.background = element_rect(fill = bg),
-    plot.background = element_rect(fill = bg),
-    panel.grid.major = element_line(color = "grey", size = 0.5),
+    plot.background = element_rect(fill = "lightyellow"),
+    # panel.grid.major = element_line(color = "grey", size = 0.5),
+    # turn off display of gridlines
+    panel.grid.major = element_blank(),
     panel.grid.minor = element_blank(),
     plot.title.position = "plot",
-    plot.caption.position = "plot",
-    
+    plot.caption.position = "plot"
   )
 
-
 # Treemap
-# value_by_type |>
-#   filter(date == max(date)) |>
-#   ggplot(aes(area = value, fill = asset_type, label = asset_type)) +
-#   geom_treemap() +
-#   geom_treemap_text() +
-#   labs(title = "Portfolio Value", x = "Date", y = "Value") +
-#   scale_fill_manual(values = pal_short) +
-#   theme_minimal() +
-#   theme(legend.position = "none") +
-#   scale_y_continuous(labels = scales::dollar) +
-#   scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") |>
-#     # rotate x labels
-#     theme(axis.text.x = element_text(angle = 45, hjust = 1))
+terminal_values |> 
+   treemap(index = "asset_type", vSize = "value", vColor = "asset_type", draw = TRUE, palette = rev(pal))
+
