@@ -7,8 +7,10 @@ if (!require("magrittr")) install.packages("magrittr")
 if (!require("quantmod")) install.packages("quantmod")
 if (!require("googlesheets4")) install.packages("googlesheets4")
 if (!require("showtext")) install.packages("showtext")
-if (!require("ggstream")) install.packages("ggstream")
-if (!require("treemap")) install.packages("treemap")
+if (!require("RColorBrewer")) install.packages("RColorBrewer")
+if (!require("treemapify")) install.packages("treemapify")
+if (!require("gganimate")) install.packages("gganimate")
+
 # if (!require("glue")) install.packages("glue")
 
 # load spreadsheets from google sheets -----------------------------------------
@@ -104,6 +106,9 @@ pal_short <- pal[
   (1 + shift_pal):(shift_pal + length(unique(values$asset_type)))
 ]
 pal[(1 + shift_pal):(shift_pal + length(unique(values$asset_type)))]
+
+pal_short <- rev(brewer.pal(5, "Blues"))
+pal <-rev(brewer.pal(5, "Blues"))
 value_by_type <- values |>
   summarize(.by = c(date, asset_type), value = sum(asset_value)) |>
   arrange(date)
@@ -213,7 +218,13 @@ annotate_label <- function(index = 1) {
   )
   return(ann)
 }
-
+annotate_labels <- function(index = 1) {
+  ann <- index |>  
+    map(\(x) annotate_label(x)) |> 
+    unlist(recursive = FALSE)
+  return(ann)
+}
+  
 
 verticals <- function(year = 2022) {
   earliest <- value_by_type_aligned |>
@@ -250,7 +261,6 @@ annotate_verticals <- function(years = 2022) {
   return(ann)
 }
 
-
 # plot the full chart ----------------------------------------------------------
 value_by_type_aligned |>
   filter(date > as.Date("2020-01-02")) |>
@@ -260,31 +270,19 @@ value_by_type_aligned |>
     fill = asset_type
   )) +
   geom_area() +
-  #geom_stream(true_range = "none")+
+  # create text annotations
   annotate_verticals(2020:2025) +
   annotate_title +
-  # label_geoms +
-  annotate_label(1) +
-  annotate_label(2) +
-  annotate_label(3) +
-  annotate_label(4) +
-  annotate_label(5) +
-  
+  annotate_labels(1:nrow(terminal_values)) +
   labs(x = "", y = "") +
-  #  theme_minimal() +
-  #  theme(legend.position = "none") +
   scale_y_continuous(labels = scales::dollar) +
-  #  scale_x_date(date_labels = "%b %Y", date_minor_breaks = "1 month") |>
-  # rotate x labels
   scale_fill_manual(values = pal_short) +
-  scale_color_manual(values = pal_short) +
+ scale_color_manual(values = pal_short) +
   coord_cartesian(clip = "off") +
   # increase size of axis labels
   theme(
      axis.line.x = element_line(linewidth = .75),
      panel.grid = element_blank(),
-     # axis.text.y=element_blank(),
-     
     axis.text = element_text(size = 10, color = txt_col),
     axis.title = element_text(size = 10, color = txt_col),
     axis.line = element_line(color = "black"),
@@ -307,7 +305,28 @@ value_by_type_aligned |>
     plot.caption.position = "plot"
   )
 
-# Treemap
-terminal_values |> 
-   treemap(index = "asset_type", vSize = "value", vColor = "asset_type", draw = TRUE, palette = rev(pal))
+annual_values <- value_by_type_aligned |> 
+  mutate(year = as.integer(year(date))) |>
+  group_by(year) |>
+  # sum the value for the last day of each year
+  # reframe(year = year,value = sum(value)) |>
+  filter(date == max(date))
+  
+anim <- annual_values |>
+  group_by(year) |>
+  filter(year > 2019) |>
+  ggplot(aes(area = value, fill = asset_type, 
+             label = paste(asset_type, "\n$", round(value/1000, 3), "MM"))) +
+  geom_treemap() +
+  geom_treemap_text(colour = "black", place = "centre", size = 15) +
+  transition_time(year) +
+  ease_aes('linear') +
+  scale_fill_manual(values = pal_short) +
+  labs(title ="Investment Assets by Type: {frame_time}",
+       subtitle = "End of Year Value") +
+  theme_void() +
+  theme(legend.position = "none")
+
+# Change duration and framerate
+animate(anim, fps = 10, duration = 20, endpause = 10)
 
