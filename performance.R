@@ -312,21 +312,52 @@ annual_values <- value_by_type_aligned |>
   # reframe(year = year,value = sum(value)) |>
   filter(date == max(date))
   
-anim <- annual_values |>
-  group_by(year) |>
+year_single = 2025
+year_subset  <- annual_values |>
   filter(year > 2019) |>
-  ggplot(aes(area = value, fill = asset_type, 
-             label = paste(asset_type, "\n$", round(value/1000, 3), "MM"))) +
-  geom_treemap() +
-  geom_treemap_text(colour = "black", place = "centre", size = 15) +
-  transition_time(year) +
-  ease_aes('linear') +
+  filter(year == year_single)
+
+pal_short[1] <- "green"
+pal_short[5] <- "tomato"
+build_treemap <- function(data){ 
+  ggplot(data,aes(area = value, fill = asset_type, 
+           label = paste(str_to_title(asset_type), "\n$", round(value/1000, 3), "MM"))) +
+  geom_treemap(layout = "fixed",radius = unit(0,"pt")) +
+  geom_treemap_text(colour = "black", place = "center", size = 15, layout = "fixed") +
   scale_fill_manual(values = pal_short) +
-  labs(title ="Investment Assets by Type: {frame_time}",
-       subtitle = "End of Year Value") +
+  labs(title =str_glue("Investment Assets by Type: {year_single}"),
+       subtitle = "End of Year Value\n",
+       caption = "Red = Crypto, Green = Cash") +
   theme_void() +
-  theme(legend.position = "none")
+  theme(legend.position = "none") +
+    # increase size of titles
+  theme(
+    # put a border around the plot
+    plot.title = element_text(size = rel(2), color = txt_col),
+    plot.subtitle = element_text(size = rel(1), color = txt_col),
+    plot.caption = element_text(size = 15, color = txt_col)
+  )
+}
+
+treemap <- build_treemap(year_subset)
+treemap
+
+year_subset  <- annual_values |>
+  filter(year > 2019)
+
+anim <- build_treemap(year_subset) + 
+  labs(title =" Investment Assets by Type: {frame_time}\n",
+       subtitle = "  End of Year Value\n\n") +
+  transition_time(year) +
+  ease_aes('linear')
+anim
 
 # Change duration and framerate
-animate(anim, fps = 10, duration = 20, endpause = 10)
+anim <- animate(anim, width = 800, height = 600,
+        fps = 10, duration = 10, endpause = 10)
+print(anim)
 
+
+
+
+anim
