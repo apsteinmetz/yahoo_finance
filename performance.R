@@ -121,17 +121,80 @@ vol_by_asset_by_day <- values |>
    mutate(rolling_volatility = zoo::rollapply(daily_return, window, sd, fill = NA, align = "right")) |> 
    mutate(rolling_volatility = rolling_volatility *sqrt(252))
 
-vol_by_asset_by_day %>% 
+#   calculate the fraction of the portfolio that each asset represents
+asset_allocation <-
+   values |> 
+   mutate(wgt_value = asset_value*daily_return) |> 
+   mutate(.by = c(date), allocation = asset_value / sum(asset_value,na.rm = TRUE)) |>
+   summarize(.by = c(date, asset_type),
+             asset_value = sum(asset_value,na.rm = TRUE),
+             allocation = sum(allocation,na.rm = TRUE))|> 
+   arrange(date) |> 
+   group_by(asset_type) |> 
+   mutate(daily_return = asset_value/lag(asset_value) - 1) |> 
+   mutate(rolling_volatility = zoo::rollapply(daily_return, window, sd, fill = NA, align = "right")) |> 
+   mutate(rolling_volatility = rolling_volatility *sqrt(252))
+
+port_allocation <- values |> 
+   mutate(wgt_value = asset_value*daily_return) |> 
+   mutate(.by = c(date), allocation = asset_value / sum(asset_value,na.rm = TRUE)) |>
+   summarize(.by = c(date),
+             asset_value = sum(asset_value,na.rm = TRUE),
+             allocation = sum(allocation,na.rm = TRUE))|> 
+   arrange(date) |> 
+   mutate(daily_return = asset_value/lag(asset_value) - 1) |>
+   filter(daily_return < .2,daily_return > -.2) |>
+   mutate(rolling_volatility = zoo::rollapply(daily_return, window, sd, fill = NA, align = "right")) |> 
+   mutate(rolling_volatility = rolling_volatility *sqrt(252)) |> 
+   mutate(.after = "date", asset_type = "portfolio")
+
+agg_by_day <- rbind(asset_allocation, port_allocation) |> 
+   # remove artifical spikes in the data do to asset inflows or outflows
+   filter(rolling_volatility < .6) |>
+   arrange(date)
+
+agg_by_day |> 
+   ggplot(aes(x=date,y=rolling_volatility,color = asset_type,alpha = .1)) +
+   geom_line() +
+   labs(x = "", y = "Volatility", title = "Rolling Volatility by Asset Type") +
+   scale_color_brewer(palette = "Set2") +
+   theme_minimal()
+
+
+
+port_allocation |> 
+   ggplot(aes(x = date, y = allocation, color = asset_type)) +
+   geom_line() +
+   labs(x = "", y = "Allocation", title = "Allocation by Asset Type") +
+   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+   scale_color_brewer(palette = "Set2") +
+   theme_minimal()
+
+   
+asset_allocation %>% 
    # this removes artifical spikes in the data
    # why, i don't know
    filter(rolling_volatility < 1 ) |> 
-   select(date, asset_type, rolling_volatility) %>%
    ggplot(aes(x = date, y = rolling_volatility, color = asset_type)) +
    geom_line() +
    labs(x = "", y = "Annualized Volatility", title = "Volatility by Asset Type") +
    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-   scale_color_brewer(palette = "Set3") +
+   scale_color_brewer(palette = "Set2") +
    theme_minimal()
+
+# compute the daily return for the portfolio
+values_daily_portfolio <- values |>
+   group_by(date) |>
+   summarize(port_return = sum(daily_return * asset_value, na.rm = TRUE) / sum(asset_value, na.rm = TRUE),
+             asset_value = sum(asset_value)) |>
+   arrange(date) |> 
+   # add annualized volatility
+   mutate(rolling_volatility = (1+zoo::rollapply(port_return, window, sd, fill = NA, align = "right"))^12-1) |> 
+   # a column for the total value
+   mutate(asset_type="portfolio")
+
+
+
 
 values_portfolio_by_day <- values |>
    ungroup() %>%
@@ -172,13 +235,13 @@ values_agg_by_day %>%
    geom_line() +
    labs(x = "", y = "Annualized Volatility", title = "Portfolio Volatility") +
    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-   scale_color_brewer(palette = "Set3") +
+   scale_color_brewer(palette = "Set2") +
    theme_minimal()
 
 ggplot(volatility_asset_all_time, aes(x = date, y = asset_value, color = asset_type)) +
    geom_line() +
    labs(x = "", y = "Asset Value", title = "Asset Value by Asset Type") +
-   scale_color_brewer(palette = "Set3") +
+   scale_color_brewer(palette = "Set2") +
    theme_minimal()
 
 
