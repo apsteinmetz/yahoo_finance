@@ -109,7 +109,7 @@ date = seq.Date(min(values$date), max(values$date), by = "day")
 # calculate volatility for each asset_type
 
 window = 60
-vol_by_asset_by_day <- values |>
+vol_by_asset_type_by_day <- values |>
    summarize(.by = c(asset_type,date),
              # asset_type = first(asset_type),
              asset_value = sum(asset_value)
