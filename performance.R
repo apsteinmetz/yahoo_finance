@@ -27,8 +27,9 @@ RELOAD <- TRUE
 
 # load spreadsheets from google sheets -----------------------------------------
 if (RELOAD) {
-   holdings_tickers <- "https://docs.google.com/spreadsheets/d/1S_tKUxNNfGq5Bq5gNcvjHYYCrwZ4TxTbw0E5-S_EcRU/edit?usp=sharing"
-   # gs4_auth_configure(path ="../googlesheets.json")
+   holdings_tickers <- "https://docs.google.com/spreadsheets/d/16XDBWC4jvlSy0qkx9hFLgJ-RJ4FAwOLpVHtHSyC-lAQ/edit?usp=sharing"
+
+      # gs4_auth_configure(path ="../googlesheets.json")
    # gs4_auth()
    # gs4_scopes()
    
@@ -43,17 +44,17 @@ if (RELOAD) {
    
    tickers <- ticker_sheet |> pull(ticker)
    tickers_unique <- tickers |> unique()
-   load("data/prices_raw.RData")
+   # load("data/prices_raw.RData")
    
    # download prices and combine into a list. Keep only the adjusted price. -------
    # By default getSymbols gets all available dates
    
-   #prices_raw <- tickers_unique |>
-   #  map(~ getSymbols(.x, src = "yahoo", auto.assign = FALSE)) |>
-   #  map(as_tibble, rownames = "date") |>
-   #  map(select, date, contains("Adjusted"))
-   
-   # save(prices_raw, file = "data/prices_raw.RData")
+   prices_raw <- tickers_unique |>
+    map(~ getSymbols(.x, src = "yahoo", auto.assign = FALSE)) |>
+    map(as_tibble, rownames = "date") |>
+    map(select, date, contains("Adjusted"))
+   save(prices_raw, file = "data/prices_raw.RData")
+
    # convert the list of ticker prices to a single tidy data frame
    # the map functions lets us step through the list of data frames
    
@@ -109,17 +110,6 @@ date = seq.Date(min(values$date), max(values$date), by = "day")
 # calculate volatility for each asset_type
 
 window = 60
-vol_by_asset_type_by_day <- values |>
-   summarize(.by = c(asset_type,date),
-             # asset_type = first(asset_type),
-             asset_value = sum(asset_value)
-   ) %>% 
-   arrange(date) %>%
-   group_by(asset_type) %>%
-   mutate(daily_return = (asset_value / lag(asset_value) -  1)) %>% 
-   # mutate(volatility = sd(log(daily_return), na.rm = TRUE) * sqrt(252)) %>% 
-   mutate(rolling_volatility = zoo::rollapply(daily_return, window, sd, fill = NA, align = "right")) |> 
-   mutate(rolling_volatility = rolling_volatility *sqrt(252))
 
 #   calculate the fraction of the portfolio that each asset represents
 asset_allocation <-
@@ -143,44 +133,18 @@ port_allocation <- values |>
              allocation = sum(allocation,na.rm = TRUE))|> 
    arrange(date) |> 
    mutate(daily_return = asset_value/lag(asset_value) - 1) |>
-   filter(daily_return < .2,daily_return > -.2) |>
    mutate(rolling_volatility = zoo::rollapply(daily_return, window, sd, fill = NA, align = "right")) |> 
    mutate(rolling_volatility = rolling_volatility *sqrt(252)) |> 
    mutate(.after = "date", asset_type = "portfolio")
 
+filter_threshold = 3 # 300%
 agg_by_day <- rbind(asset_allocation, port_allocation) |> 
+   arrange(date) |> 
    # remove artifical spikes in the data do to asset inflows or outflows
-   filter(rolling_volatility < .6) |>
-   arrange(date)
-
-agg_by_day |> 
-   ggplot(aes(x=date,y=rolling_volatility,color = asset_type,alpha = .1)) +
-   geom_line() +
-   labs(x = "", y = "Volatility", title = "Rolling Volatility by Asset Type") +
-   scale_color_brewer(palette = "Set2") +
-   theme_minimal()
-
-
-
-port_allocation |> 
-   ggplot(aes(x = date, y = allocation, color = asset_type)) +
-   geom_line() +
-   labs(x = "", y = "Allocation", title = "Allocation by Asset Type") +
-   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-   scale_color_brewer(palette = "Set2") +
-   theme_minimal()
+   filter(rolling_volatility/lag(rolling_volatility,window +1) < filter_threshold) |> 
+   filter(year(date) > 2019)
 
    
-asset_allocation %>% 
-   # this removes artifical spikes in the data
-   # why, i don't know
-   filter(rolling_volatility < 1 ) |> 
-   ggplot(aes(x = date, y = rolling_volatility, color = asset_type)) +
-   geom_line() +
-   labs(x = "", y = "Annualized Volatility", title = "Volatility by Asset Type") +
-   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-   scale_color_brewer(palette = "Set2") +
-   theme_minimal()
 
 # compute the daily return for the portfolio
 values_daily_portfolio <- values |>
@@ -196,79 +160,49 @@ values_daily_portfolio <- values |>
 
 
 
-values_portfolio_by_day <- values |>
-   ungroup() %>%
-   summarise(.by = c(date, asset),
-             asset_type = first(asset_type),
-             value = sum(asset_value),
-             #             allocation = sum(asset_value)
-             
-             wgt_return = sum(daily_return * value, na.rm = TRUE)
-             #             daily_return = sum(mean(daily_return), na.rm = TRUE),
-             #             daily_asset_value = sum((value), na.rm = TRUE),
-             #             wgt_return = sum(daily_return * value, na.rm = TRUE),
-             #             value = sum(value, na.rm = TRUE)
-   )  |> 
-   summarise(
-      .by = c(date,asset_type),
-      value = sum(value),
-      wgt_return = sum(wgt_return, na.rm = TRUE)/sum(value, na.rm = TRUE)
-   ) |>
-   summarise(
-      .by = date,
-      asset_value = sum(value),
-      daily_return = sum(wgt_return)) |>  
-   arrange(date) |> 
-   # calcuate 30-day rolling volatility
-   mutate(rolling_volatility = (1+zoo::rollapply(daily_return, window, sd, fill = NA, align = "right"))^12-1) |> 
-   mutate(asset_type="portfolio")
-
-values_agg_by_day <- rbind(vol_by_asset_by_day, values_portfolio_by_day) |> 
-   arrange(date)
 
 
 # plotting ---------------------------------------------------------------------
-#plot the volatility of the portfolio
-values_agg_by_day %>% 
-   filter(rolling_volatility < 1) |>
-   ggplot(aes(x = date, y = rolling_volatility, color = asset_type)) +
+# plot the volatility by asset type over time
+agg_by_day |> 
+   ggplot(aes(x=date,y=rolling_volatility,color = asset_type)) +
    geom_line() +
-   labs(x = "", y = "Annualized Volatility", title = "Portfolio Volatility") +
+   labs(x = "", y = "Volatility", title = "Rolling Volatility by Asset Type") +
+   theme_minimal() +
+   geom_line() +
    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
    scale_color_brewer(palette = "Set2") +
    theme_minimal()
 
-ggplot(volatility_asset_all_time, aes(x = date, y = asset_value, color = asset_type)) +
+# plot the allocation by asset type over time
+agg_by_day |> 
+   filter(asset_type != "portfolio") |>
+   ggplot(aes(x=date,y=allocation,color = asset_type, alpha = .1)) +
+   geom_line() +
+   theme_minimal() +
+   geom_line() +
+   labs(x = "", y = "Allocation", title = "Allocation by Asset Type") +
+   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+   scale_color_brewer(palette = "Set2") +
+   theme_minimal()
+
+agg_by_day |> 
+   ggplot(aes(x = date, y = asset_value, color = asset_type)) +
    geom_line() +
    labs(x = "", y = "Asset Value", title = "Asset Value by Asset Type") +
    scale_color_brewer(palette = "Set2") +
    theme_minimal()
 
 
-
-
-portfolio_return_volatility = values_daily_portfolio %>%
-   pull(port_return) %>% 
-   sd(na.rm = TRUE) * sqrt(252)
-
-
-# calculate the daily return for each asset_type
-# sum across all assets for that date and asset_type
-# this is the daily return for that asset_type
-# we need to do this before we calculate volatility
-
-
-   value_by_type <- values |>
-      summarize(
-         .by = c(date, asset_type),
-         value = sum(asset_value)
-      ) |>
-      arrange(date)
-   
-   terminal_values <- value_by_type |>
+   terminal_values <- agg_by_day |>
       filter(date == max(date)) |>
-      mutate(year = year(date)) |>
-      mutate(value = value * scale_fact) |>
+      mutate(year = year(date)) |> 
+      arrange(desc(asset_value)) |> 
+      # change asset_type to a factor with levels ordered by asset_value
+      
+   
+   
+      |>
       # sort by factor levels
       arrange(desc(asset_type)) |>
       # make a column of cumulative value
