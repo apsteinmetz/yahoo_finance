@@ -12,6 +12,8 @@ if (!require("googlesheets4"))
    install.packages("googlesheets4")
 if (!require("showtext"))
    install.packages("showtext")
+if (!require("googlefonts"))
+   install.packages("googlefonts")
 if (!require("RColorBrewer"))
    install.packages("RColorBrewer")
 if (!require("treemap"))
@@ -29,7 +31,7 @@ RELOAD <- TRUE
 if (RELOAD) {
    holdings_tickers <- "https://docs.google.com/spreadsheets/d/16XDBWC4jvlSy0qkx9hFLgJ-RJ4FAwOLpVHtHSyC-lAQ/edit?usp=sharing"
 
-      # gs4_auth_configure(path ="../googlesheets.json")
+   # gs4_auth_configure(path ="../googlesheets.json")
    # gs4_auth()
    # gs4_scopes()
    
@@ -73,6 +75,9 @@ if (RELOAD) {
    txt_col <- "black"
    showtext_auto(enable = TRUE)
 }
+
+showtext_auto()
+
 # and apply the same operations to each one
 prices <- prices_raw |>
    map( ~ rename_with(.x, ~ str_remove(.x, ".Adjusted"))) |>
@@ -104,7 +109,7 @@ values <- prices |>
    mutate(.by = asset,
           asset_value = cumprod(1 - daily_return) * first(value))
 
-date = seq.Date(min(values$date), max(values$date), by = "day")
+# date = seq.Date(min(values$date), max(values$date), by = "day")
 # 
 
 # calculate volatility for each asset_type
@@ -141,35 +146,52 @@ filter_threshold = 3 # 300%
 agg_by_day <- rbind(asset_allocation, port_allocation) |> 
    arrange(date) |> 
    # remove artifical spikes in the data do to asset inflows or outflows
-   filter(rolling_volatility/lag(rolling_volatility,window +1) < filter_threshold) |> 
+   #filter(rolling_volatility/lag(rolling_volatility,window +1) < filter_threshold) |> 
    filter(year(date) > 2019)
 
    
 
-# compute the daily return for the portfolio
-values_daily_portfolio <- values |>
-   group_by(date) |>
-   summarize(port_return = sum(daily_return * asset_value, na.rm = TRUE) / sum(asset_value, na.rm = TRUE),
-             asset_value = sum(asset_value)) |>
-   arrange(date) |> 
-   # add annualized volatility
-   mutate(rolling_volatility = (1+zoo::rollapply(port_return, window, sd, fill = NA, align = "right"))^12-1) |> 
-   # a column for the total value
-   mutate(asset_type="portfolio")
+# # compute the daily return for the portfolio
+# values_daily_portfolio <- values |>
+#    group_by(date) |>
+#    summarize(port_return = sum(daily_return * asset_value, na.rm = TRUE) / sum(asset_value, na.rm = TRUE),
+#              asset_value = sum(asset_value)) |>
+#    arrange(date) |> 
+#    # add annualized volatility
+#    mutate(rolling_volatility = (1+zoo::rollapply(port_return, window, sd, fill = NA, align = "right"))^12-1) |> 
+#    # a column for the total value
+#    mutate(asset_type="portfolio")
 
 
+terminal_values <- agg_by_day |>
+   ungroup() |>
+   mutate(.by = "asset_type",volatility = sd(daily_return,na.rm = TRUE) * sqrt(252)) |> 
+   select(-c(rolling_volatility,daily_return)) |> 
+   filter(date == max(date)) |>
+   mutate(year = year(date)) |> 
+   arrange(desc(asset_value)) |> 
+   ungroup()  |> 
+   mutate(cum_value = cumsum(asset_value)-asset_value[1])
 
 
+# factor levels in order of terminal size
+type_levels <- as.character(terminal_values$asset_type)
+terminal_values$asset_type <- fct_relevel(terminal_values$asset_type, type_levels)
+agg_by_day$asset_type <- fct_relevel(agg_by_day$asset_type, type_levels)
 
+# factor levels in order of volatility for use in stack area
+volatility_levels <- terminal_values |> 
+   arrange(volatility) |> 
+   pull(asset_type) |>
+   as.character()
 
 # plotting ---------------------------------------------------------------------
 # plot the volatility by asset type over time
 agg_by_day |> 
    ggplot(aes(x=date,y=rolling_volatility,color = asset_type)) +
-   geom_line() +
+   geom_line(linewidth = 2) +
    labs(x = "", y = "Volatility", title = "Rolling Volatility by Asset Type") +
    theme_minimal() +
-   geom_line() +
    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
    scale_color_brewer(palette = "Set2") +
    theme_minimal()
@@ -177,37 +199,27 @@ agg_by_day |>
 # plot the allocation by asset type over time
 agg_by_day |> 
    filter(asset_type != "portfolio") |>
-   ggplot(aes(x=date,y=allocation,color = asset_type, alpha = .1)) +
-   geom_line() +
+   ggplot(aes(x=date,y=allocation,color = asset_type)) +
+   geom_line(linewidth = 2) +
    theme_minimal() +
    geom_line() +
    labs(x = "", y = "Allocation", title = "Allocation by Asset Type") +
    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
    scale_color_brewer(palette = "Set2") +
-   theme_minimal()
+   theme_minimal() + 
+   # increase size of all labels
+   theme(text = element_text(size = 20))
 
 agg_by_day |> 
-   ggplot(aes(x = date, y = asset_value, color = asset_type)) +
-   geom_line() +
-   labs(x = "", y = "Asset Value", title = "Asset Value by Asset Type") +
+   ggplot(aes(x = date, y = asset_value+scale_fact, color = asset_type, fill = asset_type)) +
+   geom_line(linewidth = 2) +
+   # stacked area chart
+   # geom_area() +
+labs(x = "", y = "Asset Value", title = "Asset Value by Asset Type") +
    scale_color_brewer(palette = "Set2") +
    theme_minimal()
 
 
-   terminal_values <- agg_by_day |>
-      filter(date == max(date)) |>
-      mutate(year = year(date)) |> 
-      arrange(desc(asset_value)) |> 
-      # change asset_type to a factor with levels ordered by asset_value
-      
-   
-   
-      |>
-      # sort by factor levels
-      arrange(desc(asset_type)) |>
-      # make a column of cumulative value
-      mutate(cum_value = cumsum(value))
-   
    # function to insert an element into a list at an arbitrary position after 'index'
    insert_item <- function(item_list, index, value) {
       if (index == 0) {
@@ -238,7 +250,7 @@ agg_by_day |>
    # pal <- c("a", "b", "c")
    # insert_item(pal, 4, "new_item")
    
-   # choose our color palette -------------------------------------------------
+# choose our color palette -------------------------------------------------
    
    pal = rev(
       c(
@@ -257,27 +269,28 @@ agg_by_day |>
    #setup some custom colors
    # we need five
    pal <- pal_raw[1:3] |>
-      insert_item(0, "#FFC300") |>
-      insert_item(4, "#FF5733")
-   pal_short <- rev(pal)
+      insert_item(4, "#FFC300") |>
+      insert_item(5, "#FF5733")
+   pal_short <- pal
    
-   terminal_values <- tibble(terminal_values, color = pal_short)
+   # add colors
+   terminal_values <- tibble(filter(terminal_values, asset_type != "portfolio"), color = pal_short)
    
-   # display palette colors
-   display_palette <- function(pal) {
-      n <- length(pal)
-      image(
-         1:n,
-         1,
-         as.matrix(1:n),
-         col = pal,
-         xlab = "Custom",
-         ylab = "",
-         xaxt = "n",
-         yaxt = "n",
-         bty = "n"
-      )
-   }
+   ## display palette colors
+   # display_palette <- function(pal) {
+   #    n <- length(pal)
+   #    image(
+   #       1:n,
+   #       1,
+   #       as.matrix(1:n),
+   #       col = pal,
+   #       xlab = "Custom",
+   #       ylab = "",
+   #       xaxt = "n",
+   #       yaxt = "n",
+   #       bty = "n"
+   #    )
+   # }
    # display_palette(pal_raw)
    # display_palette(pal_short)
    
@@ -287,11 +300,11 @@ agg_by_day |>
    start_date <- as.Date("2021-03-15")
    start_y = 0
    scale_fact = 1000
-   title_pos$x <- start_date + (max(value_by_type$date) - start_date) / 5
-   title_pos$y <- start_y + (max(value_by_type$value) - start_y) / 2 * scale_fact
+   title_pos$x <- start_date + (max(agg_by_day$date) - start_date) / 5
+   title_pos$y <- start_y + (max(agg_by_day$asset_value) - start_y) / 3 * scale_fact
    
    
-   max_date <- value_by_type_aligned |>
+   max_date <-  agg_by_day|>
       filter(date == max(date))
    
    annotate_title <- ggplot2::annotate(
@@ -307,20 +320,21 @@ agg_by_day |>
       color = "black"
    )
    
-   annotate_label <- function(index = 1) {
-      if (terminal_values$asset_type[index] == "stock") {
-         y_pos <- terminal_values$cum_value[index] * .9
+   annotate_label <- function(data,index = 1) {
+      # prevent the stock label from overlapping the alts label
+      if (data$asset_type[index] == "stock") {
+         y_pos <- data$cum_value[index] * .9 * scale_fact
       } else {
-         y_pos <- terminal_values$cum_value[index]
+      y_pos <- data$cum_value[index]*scale_fact
       }
       ann <- annotate(
          "text",
-         x = terminal_values$date[index],
+         x = data$date[index],
          y = y_pos,
          label = paste0(
-            str_to_title(terminal_values$asset_type[index]),
-            " ",
-            round(terminal_values$value[index] / 1000000, 3),
+            str_to_title(data$asset_type[index]),
+            " $",
+            round(data$asset_value[index]/scale_fact, 1),
             " MM"
          ),
          hjust = 0,
@@ -329,27 +343,27 @@ agg_by_day |>
          fontface = "bold",
          family = font2,
          # color = txt_col
-         color = rev(pal_short) |> pluck(index)
+         color = data$color[index]
       )
       return(ann)
    }
-   annotate_labels <- function(index = 1) {
+   annotate_labels <- function(data,index = 1) {
       ann <- index |>
-         map(\(x) annotate_label(x)) |>
+         map(\(x) annotate_label(data,x)) |>
          unlist(recursive = FALSE)
       return(ann)
    }
    
    
    verticals <- function(year = 2022) {
-      earliest <- value_by_type_aligned |>
+      earliest <- agg_by_day |>
          filter(year(date) == year) |>
          summarize(date = min(date)) |>
          pull(date)
       
-      y_pos <- value_by_type_aligned |>
+      y_pos <- agg_by_day |>
          filter(date == earliest) |>
-         summarize(values = sum(value)) |>
+         summarize(values = sum(asset_value)) |>
          pull(values)
       
       year_date <- earliest
@@ -371,7 +385,7 @@ agg_by_day |>
             "text",
             x = year_date,
             y = y_pos * scale_fact * 1.2,
-            label = paste0("$", as.character(round(y_pos / 1000, 3)), " MM"),
+            label = paste0("$", as.character(round(y_pos* scale_fact, 3)), " MM"),
             hjust = 0.5,
             size = 5,
             lineheight = .8,
@@ -390,50 +404,55 @@ agg_by_day |>
       return(ann)
    }
    
-   # plot the full chart ----------------------------------------------------------
-   value_by_type_aligned |>
+# plot the full chart ----------------------------------------------------------
+   volatility_levels_sm <- volatility_levels[-which(volatility_levels == "portfolio")]
+   terminal_values_sm <- terminal_values |> 
+      filter(asset_type != "portfolio") |> 
+      mutate(asset_type = fct_relevel(asset_type, volatility_levels_sm)) |> 
+      arrange(asset_type) |> 
+      mutate(cum_value = cumsum(asset_value))
+   
+   vol_sort <- agg_by_day |>
       filter(date > as.Date("2020-01-02")) |>
-      ggplot(aes(
+      filter(asset_type != "portfolio") |> 
+      mutate(asset_type = fct_relevel(asset_type, volatility_levels)) |>
+      mutate(asset_type = fct_rev(asset_type))
+   
+   vol_sort |> ggplot(aes(
          x = date,
-         y = value * scale_fact,
+         y = asset_value * scale_fact,
          fill = asset_type
       )) +
       geom_area() +
-      # create text annotations
-      annotate_verticals(2020:2025) +
       annotate_title +
-      annotate_labels(1:nrow(terminal_values)) +
+      annotate_labels(data= terminal_values_sm,index = 1:5) +
       labs(x = "", y = "") +
       scale_y_continuous(labels = scales::dollar) +
-      scale_fill_manual(values = pal_short) +
-      scale_color_manual(values = pal_short) +
+      scale_fill_manual(values = rev(terminal_values_sm$color)) +
+      scale_color_manual(values = rev(terminal_values_sm$color)) +
       coord_cartesian(clip = "off") +
-      # increase size of axis labels
       theme(
          axis.line.x = element_line(linewidth = .75),
-         panel.grid = element_blank(),
-         axis.text = element_text(size = 10, color = txt_col),
-         axis.title = element_text(size = 10, color = txt_col),
+         panel.grid = element_blank(), 
          axis.line = element_line(color = "black"),
          axis.ticks = element_line(color = "black"),
-         # axis.ticks.length = unit(1, "cm"),
-         # axis.ticks.margin = unit(1, "cm"),
          plot.caption = element_text(size = 10, color = txt_col),
          plot.title = element_text(size = 10, color = txt_col),
          plot.margin = margin(20, 120, 20, 20),
-         legend.text = element_text(size = 10, color = txt_col),
-         legend.title = element_text(size = 10, color = txt_col),
-         legend.position = "none",
-         # panel.background = element_rect(fill = bg),
          plot.background = element_rect(fill = "lightyellow"),
-         # panel.grid.major = element_line(color = "grey", size = 0.5),
-         # turn off display of gridlines
          panel.grid.major = element_blank(),
          panel.grid.minor = element_blank(),
+         #increase text size of all labels
+         # axis.text = element_text(size = 10, color = txt_col),
+         # axis.title = element_text(size = 10, color = txt_col),
+         # legend.text = element_text(size = 10, color = txt_col),
+         # legend.title = element_text(size = 10, color = txt_col),
+         legend.position = "none",
+         text = element_text(size = 20),
          plot.title.position = "plot",
          plot.caption.position = "plot"
       )
-   
+
    # plot treemap ----------------------------------------------------------------
    annual_values <- value_by_type_aligned |>
       mutate(year = as.integer(year(date))) |>
@@ -462,7 +481,7 @@ agg_by_day |>
          treemap(
             ,
             index = c("year", "asset_type"),
-            vSize = "value",
+            vSize = "asset_value",
             vColor = "asset_type",
             draw = FALSE
          ) |>
@@ -547,12 +566,12 @@ agg_by_day |>
    build_treemap <- function(y_subset) {
       # levels(y_subset$asset_type) <- y_subset$asset_type
       
-      total = round(sum(y_subset$value) / 1000, 3)
+      total = round(sum(y_subset$asset_value) / 1000, 3)
       year_x = y_subset$year
       
       
       y_subset |> ggplot(aes(
-         area = value,
+         area = asset_value,
          fill = asset_type,
          label = paste(
             str_to_title(asset_type),
@@ -585,8 +604,8 @@ agg_by_day |>
          )
    }
    
-   # treemap <- build_treemap(year_subset)
-   # treemap
+   treemap <- build_treemap(year_subset)
+   treemap
    
    
    
