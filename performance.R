@@ -287,12 +287,27 @@ volatility_levels <- terminal_values |>
 agg_by_day |>
    filter(rolling_volatility > 0) |>
   ggplot(aes(x = date, y = rolling_volatility, color = asset_type)) +
-  geom_line(linewidth = 2) +
+  geom_line(linewidth = .5) +
+  geom_line(data = filter(agg_by_day, asset_type == "portfolio"),
+            aes(x = date, y = rolling_volatility, color = asset_type),
+            linewidth = 2) +
   labs(x = "", y = "Volatility", title = "Rolling Volatility by Asset Type") +
   theme_minimal() +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  scale_color_brewer(palette = "Set2") +
-  theme_minimal()
+#   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+   scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      breaks = seq(0, max(agg_by_day$rolling_volatility, na.rm = TRUE), by = 0.1)
+   )
+# break by 1 year
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  scale_color_manual(values = RColorBrewer::brewer.pal(6,"Dark2")) +
+  theme_minimal()+
+   theme(
+      text = element_text(size = 20),
+      legend.position = "none",
+      plot.title.position = "plot",
+      plot.caption.position = "plot")
+
 
 # plot the weight by asset type over time
 agg_by_day |>
@@ -744,9 +759,6 @@ rr_mon <- rolling_risk_monthly |>
          text = element_text(size = 15),
          strip.text = element_text(size = 15, face = "bold"),
          axis.text.x = element_text(angle = 45, hjust = 1))
-
-# The error occurs because you're using `data$month` in the subtitle when `data` isn't defined.
-#To fix this in your animated plot code, modify the subtitle to use `{closest_state}` or remove the subtitle. Here's the corrected code:
 
 
 rr_mon
