@@ -1,0 +1,104 @@
+
+---
+title: "Risk Dashboard"
+format:
+  dashboard:
+    orientation: columns
+    number-sections: false
+---
+
+```{r}
+library(tidyverse)
+library(bslib)
+library(bsicons)
+load("data/dashboard_setup.RData")
+#load("data/agg_by_day.RData")
+#load("data/rolling_risk.RData")
+```
+
+
+
+```{r prep}
+
+vbs <- list(
+ value = list(
+   icon ="currency-dollar",
+   color = "success",
+   value = paste(scales::dollar(total_value,.1),"MM")
+  ),
+ volatility = list(
+    icon = "percent",
+    value =  scales::percent(latest_vol,.1),
+    color = "danger"
+  ),
+ hist_vol = list(
+    icon = "percent",
+    value =  scales::percent(historical_vol,.1),
+    color = "warning"
+  ),
+ max_date = list(
+    value = max(agg_by_day$date)
+ )
+)
+
+```
+
+## column
+```{r}
+#| content: "valuebox"
+#| title: "As Of:"
+vbs[[4]]
+```
+```{r}
+#| content: "valuebox"
+#| title: "Total Value"
+vbs[[1]]
+```
+```{r}
+#| content: "valuebox"
+#| title: "Latest Volatility"
+vbs[[2]]
+
+```{r}
+#| content: "valuebox"
+#| title: "Historical Volatility"
+vbs[[3]]
+```
+##
+
+## column {width = 50%}
+### row {.tabset}
+:::{.card title="5-Year Cumulative Growth"}
+```{r}
+mountain
+```
+:::
+:::{.card title="LTM Cumulative Growth"}
+```{r}
+mountain_ltm
+```
+:::
+
+###
+### row
+```{r}
+cum_risk
+```
+###
+##
+
+## column
+### row 
+:::{.card title="Risk Decomposition"}
+```{r}
+risk_decomp
+```
+:::
+###
+
+### row
+:::{.card title="Rolling Risk"}
+![]("data/rolling_risk.gif")
+:::
+###
+##

@@ -64,6 +64,7 @@ bg <- "white"
 txt_col <- "black"
 showtext_auto(enable = TRUE)
 
+load("data/prices_raw.RData")
 # and apply the same operations to each one
 prices <- prices_raw |>
   map(~ rename_with(.x, ~ str_remove(.x, ".Adjusted"))) |>
@@ -171,6 +172,8 @@ agg_by_day <- agg_by_day %>%
          fill = list(asset_value = 0, daily_return = 0, weight = 0, rolling_volatility = 0)
       )
 
+save(agg_by_day, file = "data/agg_by_day.RData")
+
 # Calculate risk decomposition -------------------------------------------------
 risk_decomp <- function(date_1) {
    WINDOW <- 60
@@ -228,6 +231,8 @@ rolling_risk <- agg_by_day |>
    arrange(date)  |> 
    distinct() |> 
    remove_missing()
+
+save(rolling_risk, file = "data/rolling_risk.RData")
 
 rolling_risk_weekly <- rolling_risk %>%
    mutate(week = floor_date(date, "week")) %>%
@@ -297,7 +302,7 @@ agg_by_day |>
    scale_y_continuous(
       labels = scales::percent_format(accuracy = 1),
       breaks = seq(0, max(agg_by_day$rolling_volatility, na.rm = TRUE), by = 0.1)
-   )
+   ) +
 # break by 1 year
   scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
   scale_color_manual(values = RColorBrewer::brewer.pal(6,"Dark2")) +
@@ -471,7 +476,7 @@ setup_annotations <- function() {
       lineheight = .8,
       fontface = "bold",
       family = font2,
-      color = data$color[index]
+      color = label_pal[index]
     )
     return(ann)
   }
@@ -545,7 +550,8 @@ setup_annotations <- function() {
 
 # plot the full chart ----------------------------------------------------------
 pal <- RColorBrewer::brewer.pal(5,"Dark2")
-label_pal <- c(pal[4],pal[1],pal[3],pal[5],pal[2])
+# "alts"      "stock"     "private"   "portfolio" "bond"      "cash"   
+label_pal <- rev(c(pal[2],pal[5],pal[1],pal[3],pal[4]))
 plot_mountain <- function() {
   volatility_levels_sm <- volatility_levels[
     -which(volatility_levels == "portfolio")
@@ -596,8 +602,8 @@ plot_mountain <- function() {
 setup_annotations()
 cat("Plotting mountain chart\n")
 plot_mountain()
-display_palette(pal)
-display_palette(label_pal)
+# display_palette(pal)
+# display_palette(label_pal)
 
 # plot the risk decomposition -------------------------------------------------
 
