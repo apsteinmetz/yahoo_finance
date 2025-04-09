@@ -3,6 +3,7 @@
 title: "Risk Dashboard"
 format:
   dashboard:
+    embed-resources: true
     orientation: columns
     number-sections: false
 ---
@@ -37,13 +38,14 @@ vbs <- list(
     color = "warning"
   ),
  max_date = list(
+   icon = "calendar4-event",
     value = max(agg_by_day$date)
  )
 )
 
 ```
 
-## column
+## Column {width = 10%}
 ```{r}
 #| content: "valuebox"
 #| title: "As Of:"
@@ -64,41 +66,32 @@ vbs[[2]]
 #| title: "Historical Volatility"
 vbs[[3]]
 ```
-##
 
-## column {width = 50%}
-### row {.tabset}
-:::{.card title="5-Year Cumulative Growth"}
-```{r}
+## Column {width=45%}
+### Row {.tabset}
+```{r title = "Cumulative Value", fig.width=10}
 mountain
 ```
-:::
-:::{.card title="LTM Cumulative Growth"}
-```{r}
+
+```{r title = "Cumulative Value LTM", fig.width=10}
 mountain_ltm
 ```
-:::
+### Row
+```{r title = "Row 2"}
+rolling_vol_g
+```
 
-###
-### row
+
+## Column {width=45%}
+
 ```{r}
 cum_risk
 ```
-###
-##
 
-## column
-### row 
-:::{.card title="Risk Decomposition"}
 ```{r}
-risk_decomp
+# load and display a gif
+# To load and display a gif in your R Markdown/Quarto dashboard, you can use:
+  
+knitr::include_graphics((here::here("risk_dashboard_files/figure-html/rolling_risk.gif")))
 ```
-:::
-###
 
-### row
-:::{.card title="Rolling Risk"}
-![]("data/rolling_risk.gif")
-:::
-###
-##

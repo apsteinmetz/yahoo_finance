@@ -1,0 +1,42 @@
+---
+title: "Diamonds Explorer"
+format: 
+  dashboard:
+    orientation: columns
+---
+    
+## Column {width=10%}
+
+```{r title = "Value Box"}
+#| content: "valuebox"
+#| title: "Total Value"
+list(value = 3,
+     color = "warning")
+```
+
+## Column {width=45%}
+### Row {.tabset}
+```{r title = "Tab One"}
+print("Tab One")
+```
+
+```{r title = "Tab Two"}
+print("Tab Two")
+
+```
+### Row
+```{r title = "Row 2"}
+print("Row Two")
+
+```
+
+
+## Column {width=45%}
+
+```{r}
+print("Col Two R1")
+```
+
+```{r}
+print("Col Two R2")
+```

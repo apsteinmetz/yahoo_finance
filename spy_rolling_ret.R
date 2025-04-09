@@ -64,3 +64,6 @@ spy_ret |>
    #  make y-axis labels every 10  percent
    scale_y_continuous(breaks = seq(-0.5, 0.5, by = 0.1),
                       labels = scales::percent)
+
+ggplot(filter(agg_by_day,asset_type == "portfolio"),aes(date,rolling_volatility)) + 
+   geom_line()
