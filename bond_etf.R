@@ -1,24 +1,44 @@
-# fixed income eth hedging
+# fixed income etf hedging
 library(tidyverse)
 library(quantmod)
+library(tidymodels)
 
-tickers = c('SHY', 'IEF', 'TLT')
 
 # download prices and combine into a list. Keep only the adjusted price.
-RELOAD = FALSE
+RELOAD = TRUE
 if (RELOAD) {
-prices_raw <- tickers |> 
+   tickers = c('SHY', 'IEF', 'TLT')
+   prices_raw <- tickers |> 
    map(~getSymbols(.x, src = "yahoo", auto.assign = FALSE)) |> 
    map(as_tibble, rownames = "date") |> 
    map(select, date, contains("Adjusted"))
+
+   prices_shy <- prices_raw |> 
+      map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
+      # use column names to make a ticker column
+      map2(tickers, ~mutate(.x, ticker = .y)) |>
+      # convert date string to date type
+      map(~mutate(.x, date = as.Date(date))) |> 
+      # combine the list of data frames into one
+      reduce(full_join, by = c("date", "ticker")) |> 
+      pivot_longer(cols = -c(date, ticker), names_to = "type", values_to = "price") |> 
+      select(date, ticker,price) |> 
+      arrange(date) |> 
+      drop_na()
+   
+   save(prices_shy, file = "data/prices_shy.RData")
+fred_codes <- "T10Y2Y"
+fred_raw <- fred_codes |> 
+   map(~getSymbols(.x, src = "FRED", auto.assign = FALSE)) |> 
+   map(as_tibble, rownames = "date")
+
 # convert the list of ticker prices to a single tidy data frame
 # the map functions lets us step through the list of data frames
 # and apply the same operations to each one
-
-prices_shy <- prices_raw |> 
-   map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
-   # use column names to make a ticker column
-   map2(tickers, ~mutate(.x, ticker = .y)) |>
+values_fred <- fred_raw |> 
+#   map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
+#   # use column names to make a ticker column
+   map2(fred_codes, ~mutate(.x, ticker = .y)) |>
    # convert date string to date type
    map(~mutate(.x, date = as.Date(date))) |> 
    # combine the list of data frames into one
@@ -49,6 +69,13 @@ returns <- prices_shy |>
    # remove rows with NA in any column
    drop_na()
 
+values_fred <- values_fred |> 
+   # trim to match earliest date in prices
+   filter(date >= min(prices_shy$date)) |> 
+   # pivot wider
+   pivot_wider(names_from = ticker, values_from = price)
+   
+
 #  make a monthly frequency return data frame
 window <- 12 # rolling 12 month window
 returns_monthly <- prices_shy |> 
@@ -70,8 +97,6 @@ returns_monthly <- prices_shy |>
    # remove rows with NA in any column
    drop_na()
 
-
-
 # make mountain chart
 returns_monthly |> 
    ggplot(aes(x = date, y = value, color = ticker)) +
@@ -80,13 +105,14 @@ returns_monthly |>
         x = "Date",
         y = "Value") +
    theme_minimal() +
-   scale_color_manual(values = c("SHY" = "blue", "IEF" = "red", "TLT" = "green"))
+   scale_color_manual(values = c("SHY" = "green", "IEF" = "blue", "TLT" = "red"))
 
 # plot rolling volatility
 returns_monthly |> 
    ggplot(aes(x = date, y = vol, color = ticker)) +
    geom_line() +
    scale_y_continuous(labels = scales::percent) +
+   scale_color_manual(values = c("blue","green","red")) +
    labs(title = str_glue("{window}-Month Rolling Volatility"),
         x = "Date",
         y = "Annualized Volatility") +
@@ -108,10 +134,12 @@ convexity_TLT <- 3.44
 # pivot longer
 returns_long <- returns_monthly |> 
    pivot_longer(cols = -c(date,ticker), names_to = "item", values_to = "value")
+returns_wide <- returns_long |> 
+   pivot_wider(names_from = ticker, values_from = value) 
 
-# pivot wider
+
 correlations <- returns_long |> 
-   filter(item == "daily_return") |>
+   filter(item == "monthly_return") |>
    pivot_wider(names_from = ticker, values_from = value) |> 
   # add rolling correlation
    mutate(cor_SHY_IEF = runCor(SHY, IEF, n = window, sample = FALSE),
@@ -137,8 +165,13 @@ correlations |>
    scale_y_continuous(labels = scales::percent)
 
 
-# regress each ticker pair
-regression_SHY_IEF <- lm(daily_return_SHY ~ daily_return_IEF, data = values_wide)
+window = 24
+regress
+
+
+
+
+
 summary(regression_SHY_IEF)
 regression_SHY_TLT <- lm(daily_return_SHY ~ daily_return_TLT, data = values_wide)
 summary(regression_SHY_TLT)
