@@ -1,18 +1,18 @@
 # fixed income etf hedging
 library(tidyverse)
 library(quantmod)
-library(tidymodels)
-
+library(tidyfit)
+library(tsgarch)
 
 # download prices and combine into a list. Keep only the adjusted price.
-RELOAD = TRUE
+RELOAD = FALSE
 if (RELOAD) {
    tickers = c('SHY', 'IEF', 'TLT')
    prices_raw <- tickers |> 
    map(~getSymbols(.x, src = "yahoo", auto.assign = FALSE)) |> 
    map(as_tibble, rownames = "date") |> 
    map(select, date, contains("Adjusted"))
-
+   
    prices_shy <- prices_raw |> 
       map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
       # use column names to make a ticker column
@@ -27,6 +27,7 @@ if (RELOAD) {
       drop_na()
    
    save(prices_shy, file = "data/prices_shy.RData")
+   
 fred_codes <- "T10Y2Y"
 fred_raw <- fred_codes |> 
    map(~getSymbols(.x, src = "FRED", auto.assign = FALSE)) |> 
@@ -36,8 +37,6 @@ fred_raw <- fred_codes |>
 # the map functions lets us step through the list of data frames
 # and apply the same operations to each one
 values_fred <- fred_raw |> 
-#   map(~rename_with(.x, ~str_remove(.x, ".Adjusted"))) |> 
-#   # use column names to make a ticker column
    map2(fred_codes, ~mutate(.x, ticker = .y)) |>
    # convert date string to date type
    map(~mutate(.x, date = as.Date(date))) |> 
@@ -49,8 +48,10 @@ values_fred <- fred_raw |>
    drop_na()
 
 save(prices_shy, file = "data/prices_shy.RData")
+save(values_fred, file = "data/values_fred.RData")
 } else {
    # load the data from file
+   load("data/values_fred.RData")
    load("data/prices_shy.RData")
 }
 # create daily returns and volatility
@@ -77,7 +78,7 @@ values_fred <- values_fred |>
    
 
 #  make a monthly frequency return data frame
-window <- 12 # rolling 12 month window
+window <- 36 # rolling month window
 returns_monthly <- prices_shy |> 
    #find date in each month closest to the 1st day of that month
    mutate(month = floor_date(date, "month")) |>
@@ -95,7 +96,48 @@ returns_monthly <- prices_shy |>
    mutate(vol = vol*250^.5) |>
    mutate(value = cumprod(1+monthly_return)) |>
    # remove rows with NA in any column
-   drop_na()
+   drop_na() |> 
+   ungroup()
+
+# pivot longer
+returns_long <- returns_monthly |> 
+   pivot_longer(cols = -c(date,ticker), names_to = "item", values_to = "value")
+returns_wide <- returns_long |> 
+   pivot_wider(names_from = ticker, values_from = value) 
+
+# function to pull a single item from a named list by name
+pull_item <- function(x, name) {
+   x[[name]]
+}
+
+garch <- function(.ticker) {
+   # return stop with error if .ticker is not in ticker
+   if (!.ticker %in% unique(returns_monthly$ticker)) {
+      stop("Ticker not found in returns_monthly")
+   }
+   returns_monthly|> 
+   filter(ticker == .ticker) |>
+   select(date,log_monthly_return) |>
+   as.xts() |>
+   garch_modelspec(model = 'egarch', constant = TRUE, 
+                               init = 'unconditional', distribution = 'jsu') |> 
+   estimate() |>
+   pull_item("sigma") |> 
+   as_tibble() |>
+   rename(garch_vol = value) |>
+   # mutate(garch_vol = garch_vol * sqrt(256)) |>
+   mutate(.before = "garch_vol", date = pull(filter(returns_monthly,ticker == .ticker),date)) |> 
+   mutate(.after= "date", ticker = .ticker) |> 
+   # right_join(returns_monthly, by = c("date",ticker)) |> 
+   identity()
+}
+
+returns_monthly_g <- c("SHY","TLT","IEF") |> 
+   map(garch) |> 
+   bind_rows() |>
+   # add garch volatility to returns_monthly
+   right_join(returns_monthly, by = c("date", "ticker")) |>
+   relocate(garch_vol, .after = vol)
 
 # make mountain chart
 returns_monthly |> 
@@ -108,8 +150,8 @@ returns_monthly |>
    scale_color_manual(values = c("SHY" = "green", "IEF" = "blue", "TLT" = "red"))
 
 # plot rolling volatility
-returns_monthly |> 
-   ggplot(aes(x = date, y = vol, color = ticker)) +
+returns_monthly_g |> 
+   ggplot(aes(x = date, y = garch_vol, color = ticker)) +
    geom_line() +
    scale_y_continuous(labels = scales::percent) +
    scale_color_manual(values = c("blue","green","red")) +
@@ -125,17 +167,6 @@ eff_dur_TLT <- 15.81
 convexity_SHY <- 0.11
 convexity_IEF <- 0.59
 convexity_TLT <- 3.44
-
-
-
-
-
-# compute hedge ratios based on vol
-# pivot longer
-returns_long <- returns_monthly |> 
-   pivot_longer(cols = -c(date,ticker), names_to = "item", values_to = "value")
-returns_wide <- returns_long |> 
-   pivot_wider(names_from = ticker, values_from = value) 
 
 
 correlations <- returns_long |> 
@@ -158,22 +189,71 @@ correlations <- returns_long |>
 correlations |> 
    ggplot(aes(x = date, y = correlation, color = fund_pair)) +
    geom_line() +
-   labs(title = str_glue("{window}-Day Rolling Correlation"),
+   labs(title = str_glue("{window}-Month Rolling Correlation"),
         x = "Date",
         y = "Correlation") +
    theme_minimal() +
    scale_y_continuous(labels = scales::percent)
 
 
-window = 24
-regress
+window = 36 # months
+betas <- returns_wide |> 
+   filter(item == "monthly_return") |> 
+   select(-item) |> 
+   mutate(regr_beta_SHY_TLT = slider::slide_period_dbl(
+      .x = tibble(TLT, SHY),
+      .i = date,
+      .period = "month",
+      .f = ~coef(lm(TLT~SHY, data = as.data.frame(.x)))[2],
+      .before = window-1)) |> 
+   mutate(regr_beta_SHY_IEF = slider::slide_period_dbl(
+      .x = tibble(IEF, SHY),
+      .i = date,
+      .period = "month",
+      .f = ~coef(lm(IEF~SHY, data = .x))[2],
+      .before = window-1)) |> 
+   mutate(regr_beta_TLT_IEF = slider::slide_period_dbl(
+     .x = tibble(IEF, TLT),
+     .i = date,
+     .period = "month",
+     .f = ~coef(lm(IEF~TLT, data = .x))[2],
+    .before = window-1)) |> 
+   # add moving averages
+   mutate(regr_beta_SHY_TLT = slider::slide_dbl(
+      .x = regr_beta_SHY_TLT,
+      .i = date,
+      .f = ~mean(.x, na.rm = TRUE),
+      .before = window-1)) |>
+   mutate(regr_beta_SHY_IEF = slider::slide_dbl(
+      .x = regr_beta_SHY_IEF,
+      .i = date,
+      .f = ~mean(.x, na.rm = TRUE),
+      .before = window-1)) |>
+   mutate(regr_beta_TLT_IEF = slider::slide_dbl(
+      .x = regr_beta_TLT_IEF,
+      .i = date,
+      .f = ~mean(.x, na.rm = TRUE),
+      .before = window-1))
+   
 
-
-
-
+# plot betas
+betas |> 
+   select(date, regr_beta_SHY_TLT, regr_beta_SHY_TLT_ma) |> 
+   pivot_longer(-date, names_to = "fund_pair", values_to = "beta") |> 
+   ggplot(aes(x = date, y = beta, color = fund_pair)) +
+   geom_line() +
+   #geom_smooth()
+   labs(title = str_glue("{window}-Month Rolling Beta"),
+        x = "Date",
+        y = "Beta") +
+   theme_minimal()
 
 summary(regression_SHY_IEF)
 regression_SHY_TLT <- lm(daily_return_SHY ~ daily_return_TLT, data = values_wide)
+
+
+regression_SHY_TLT <- pluck(coef(lm(TLT~SHY, data = betas)),2)
+
 summary(regression_SHY_TLT)
 regression_IEF_TLT <- lm(daily_return_IEF ~ daily_return_TLT, data = values_wide)
 summary(regression_IEF_TLT)
