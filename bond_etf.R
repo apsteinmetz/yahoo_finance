@@ -1,8 +1,9 @@
 # fixed income etf hedging
 library(tidyverse)
+# library(tidyfit)
 library(quantmod)
-library(tidyfit)
 library(tsgarch)
+
 
 # download prices and combine into a list. Keep only the adjusted price.
 RELOAD = FALSE
@@ -74,11 +75,14 @@ values_fred <- values_fred |>
    # trim to match earliest date in prices
    filter(date >= min(prices_shy$date)) |> 
    # pivot wider
-   pivot_wider(names_from = ticker, values_from = price)
+   pivot_wider(names_from = ticker, values_from = price) |> 
+   # spread in basis points
+   mutate(T10Y2Y = T10Y2Y*100)
    
 
 #  make a monthly frequency return data frame
 window <- 36 # rolling month window
+period_scale <- 12^.5
 returns_monthly <- prices_shy |> 
    #find date in each month closest to the 1st day of that month
    mutate(month = floor_date(date, "month")) |>
@@ -93,7 +97,7 @@ returns_monthly <- prices_shy |>
    drop_na() |> 
    # add sd of trailing 30-day monthly returns
    mutate(vol = rollapply(log_monthly_return, width = window, FUN = sd, fill = NA, align = "right")) |>
-   mutate(vol = vol*250^.5) |>
+   mutate(vol = vol*period_scale) |>
    mutate(value = cumprod(1+monthly_return)) |>
    # remove rows with NA in any column
    drop_na() |> 
@@ -125,7 +129,7 @@ garch <- function(.ticker) {
    pull_item("sigma") |> 
    as_tibble() |>
    rename(garch_vol = value) |>
-   # mutate(garch_vol = garch_vol * sqrt(256)) |>
+   mutate(garch_vol = garch_vol * period_scale) |>
    mutate(.before = "garch_vol", date = pull(filter(returns_monthly,ticker == .ticker),date)) |> 
    mutate(.after= "date", ticker = .ticker) |> 
    # right_join(returns_monthly, by = c("date",ticker)) |> 
@@ -139,6 +143,13 @@ returns_monthly_g <- c("SHY","TLT","IEF") |>
    right_join(returns_monthly, by = c("date", "ticker")) |>
    relocate(garch_vol, .after = vol)
 
+# compute average vol for the last 2 years
+avg_vol <- returns_monthly_g |> 
+   filter(date >= max(date)-years(2)) |> 
+   group_by(ticker) |> 
+   summarise(avg_vol = mean(vol, na.rm = TRUE),avg_garch_vol = mean(garch_vol, na.rm = TRUE)) |> 
+   ungroup()
+
 # make mountain chart
 returns_monthly |> 
    ggplot(aes(x = date, y = value, color = ticker)) +
@@ -151,7 +162,7 @@ returns_monthly |>
 
 # plot rolling volatility
 returns_monthly_g |> 
-   ggplot(aes(x = date, y = garch_vol, color = ticker)) +
+   ggplot(aes(x = date, y = vol, color = ticker)) +
    geom_line() +
    scale_y_continuous(labels = scales::percent) +
    scale_color_manual(values = c("blue","green","red")) +
@@ -173,11 +184,11 @@ correlations <- returns_long |>
    filter(item == "monthly_return") |>
    pivot_wider(names_from = ticker, values_from = value) |> 
   # add rolling correlation
-   mutate(cor_SHY_IEF = runCor(SHY, IEF, n = window, sample = FALSE),
-          cor_SHY_TLT = runCor(SHY, TLT, n = window, sample = FALSE),
+   mutate(cor_IEF_SHY = runCor(SHY, IEF, n = window, sample = FALSE),
+          cor_TLT_SHY = runCor(SHY, TLT, n = window, sample = FALSE),
           cor_IEF_TLT = runCor(IEF, TLT, n = window, sample = FALSE)) |>
    # select correlation columns
-   select(date, cor_SHY_IEF, cor_SHY_TLT, cor_IEF_TLT) |>
+   select(date, cor_IEF_SHY, cor_TLT_SHY, cor_IEF_TLT) |>
    # rename columns to remove 'cor_' prefix
    rename_with(~str_remove(.x, "cor_")) |>
    # remove rows with NA in any column
@@ -196,49 +207,71 @@ correlations |>
    scale_y_continuous(labels = scales::percent)
 
 
-window = 36 # months
-betas <- returns_wide |> 
+window = 24 # months
+beta_ratios <- returns_wide |> 
    filter(item == "monthly_return") |> 
    select(-item) |> 
-   mutate(regr_beta_SHY_TLT = slider::slide_period_dbl(
+   mutate(beta_ratio_TLT_SHY = slider::slide_period_dbl(
       .x = tibble(TLT, SHY),
       .i = date,
       .period = "month",
       .f = ~coef(lm(TLT~SHY, data = as.data.frame(.x)))[2],
       .before = window-1)) |> 
-   mutate(regr_beta_SHY_IEF = slider::slide_period_dbl(
+   mutate(beta_ratio_IEF_SHY = slider::slide_period_dbl(
       .x = tibble(IEF, SHY),
       .i = date,
       .period = "month",
       .f = ~coef(lm(IEF~SHY, data = .x))[2],
       .before = window-1)) |> 
-   mutate(regr_beta_TLT_IEF = slider::slide_period_dbl(
+   mutate(beta_ratio_TLT_IEF = slider::slide_period_dbl(
      .x = tibble(IEF, TLT),
      .i = date,
      .period = "month",
      .f = ~coef(lm(IEF~TLT, data = .x))[2],
     .before = window-1)) |> 
    # add moving averages
-   mutate(regr_beta_SHY_TLT = slider::slide_dbl(
-      .x = regr_beta_SHY_TLT,
+   mutate(beta_ratio_TLT_SHY_ma = slider::slide_dbl(
+      .x = beta_ratio_TLT_SHY,
       .i = date,
       .f = ~mean(.x, na.rm = TRUE),
       .before = window-1)) |>
-   mutate(regr_beta_SHY_IEF = slider::slide_dbl(
-      .x = regr_beta_SHY_IEF,
+   mutate(beta_ratio_IEF_SHY_ma = slider::slide_dbl(
+      .x = beta_ratio_IEF_SHY,
       .i = date,
       .f = ~mean(.x, na.rm = TRUE),
       .before = window-1)) |>
-   mutate(regr_beta_TLT_IEF = slider::slide_dbl(
-      .x = regr_beta_TLT_IEF,
+   mutate(beta_ratio_TLT_IEF_ma = slider::slide_dbl(
+      .x = beta_ratio_TLT_IEF,
       .i = date,
       .f = ~mean(.x, na.rm = TRUE),
       .before = window-1))
    
+vol_ratios <- returns_wide |> 
+   filter(item == "vol") |>
+   select(-item) |>
+   mutate(vol_ratio_TLT_SHY = TLT/SHY,
+          vol_ratio_IEF_SHY = IEF/SHY,
+          vol_ratio_TLT_IEF = TLT/IEF) |>
+   # add moving averages
+   mutate(vol_ratio_TLT_SHY_ma = slider::slide_dbl(
+      .x = vol_ratio_TLT_SHY,
+      .i = date,
+      .f = ~mean(.x, na.rm = TRUE),
+      .before = window-1)) |>
+   mutate(vol_ratio_IEF_SHY_ma = slider::slide_dbl(
+      .x = vol_ratio_IEF_SHY,
+      .i = date,
+      .f = ~mean(.x, na.rm = TRUE),
+      .before = window-1)) |>
+   mutate(vol_ratio_TLT_IEF_ma = slider::slide_dbl(
+      .x = vol_ratio_TLT_IEF,
+      .i = date,
+      .f = ~mean(.x, na.rm = TRUE),
+      .before = window-1))
 
 # plot betas
-betas |> 
-   select(date, regr_beta_SHY_TLT, regr_beta_SHY_TLT_ma) |> 
+beta_ratios |> 
+   select(date, beta_ratio_TLT_SHY, beta_ratio_TLT_SHY_ma) |> 
    pivot_longer(-date, names_to = "fund_pair", values_to = "beta") |> 
    ggplot(aes(x = date, y = beta, color = fund_pair)) +
    geom_line() +
@@ -248,115 +281,113 @@ betas |>
         y = "Beta") +
    theme_minimal()
 
-summary(regression_SHY_IEF)
-regression_SHY_TLT <- lm(daily_return_SHY ~ daily_return_TLT, data = values_wide)
+# focus on IEF/SHY
+hedged_port <- returns_wide |> 
+   filter(item == "monthly_return") |> 
+   select(-item,-TLT) |> 
+   left_join(select(beta_ratios,date,beta_ratio_IEF_SHY), by = "date") |>
+   left_join(select(vol_ratios,date,vol_ratio_IEF_SHY), by = "date") |> 
+   mutate(dur_ratio_IEF_SHY = eff_dur_IEF/eff_dur_SHY) |> 
+   drop_na()
 
 
-regression_SHY_TLT <- pluck(coef(lm(TLT~SHY, data = betas)),2)
-
-summary(regression_SHY_TLT)
-regression_IEF_TLT <- lm(daily_return_IEF ~ daily_return_TLT, data = values_wide)
-summary(regression_IEF_TLT)
-values_wide |> 
-   ggplot(aes(x = daily_return_SHY, y = daily_return_IEF)) +
+# regression scatter plot 
+hedged_port|> 
+   ggplot(aes(x = SHY, y = IEF)) +
    geom_point() +
    geom_smooth(method = "lm", color = "red") +
    labs(title = "SHY vs IEF",
-        x = "SHY Daily Return",
-        y = "IEF Daily Return",
+        x = "SHY Monthly Return",
+        y = "IEF Monthly Return",
         subtitle = sprintf("Beta: %.2f, R²: %.2f", 
-                           coef(regression_SHY_IEF)[2],
-                           summary(regression_SHY_IEF)$r.squared)) +
+                           coef(lm(IEF~SHY, data = returns_wide))[2],
+                           summary(lm(IEF~SHY, data = returns_wide))$r.squared)) +
    theme_minimal() +
    scale_y_continuous(labels = scales::percent) +
    scale_x_continuous(labels = scales::percent)
 
-values_wide |> 
-   ggplot(aes(x = daily_return_SHY, y = daily_return_TLT)) +
-   geom_point() +
-   geom_smooth(method = "lm", color = "red") +
-   labs(title = "SHY vs TLT",
-        x = "SHY Daily Return",
-        y = "TLT Daily Return",
-        subtitle = sprintf("Beta: %.2f, R²: %.2f", 
-                           coef(regression_SHY_TLT)[2],
-                           summary(regression_SHY_TLT)$r.squared)) +
-   theme_minimal() +
-   scale_y_continuous(labels = scales::percent) +
-   scale_x_continuous(labels = scales::percent)
-
-values_wide |> 
-   ggplot(aes(x = daily_return_IEF, y = daily_return_TLT)) +
-   geom_point() +
-   geom_smooth(method = "lm", color = "red") +
-   labs(title = "IEF vs TLT",
-        x = "IEF Daily Return",
-        y = "TLT Daily Return",
-        subtitle = sprintf("Beta: %.2f, R²: %.2f", 
-                           coef(regression_IEF_TLT)[2],
-                           summary(regression_IEF_TLT)$r.squared)) +
-   theme_minimal() +
-   scale_y_continuous(labels = scales::percent) +
-   scale_x_continuous(labels = scales::percent)
-# Calculate hedge ratios (beta * ratio of prices)
-values_hedged <- values_wide |> 
+# multiply SHY by each of the hedge ratios
+# daily return of long hedge ratio SHY  and short 1 IEF
+# use just last 3 years
+# lag the hedge ratios by 1 month because next month's return is based on 
+# this month's hedge ratio.  We rebalance monthly.
+hedge_port_4y <- hedged_port |> 
+   filter(date >= max(date)-years(4)) |>
    mutate(
-      hedge_ratio_IEF = coef(regression_SHY_IEF)[2] * SHY/IEF,
-      # hedge ratios baed on duration
-      duration_ratio_IEF = eff_dur_SHY / eff_dur_IEF,
-      # Calculate hedged returns
-      equal_hedged_IEF = 1+(daily_return_SHY),
-      #duration_hedged_IEF = 1+(daily_return_SHY - duration_ratio_IEF * daily_return_IEF),
-      # Calculate cumulative returns
-      cum_equal_IEF = cumprod(equal_hedged_IEF),
-      #cum_duration_IEF = cumprod(duration_hedged_IEF)
+      equal_hedged = SHY-IEF,
+      duration_hedged = SHY*lag(dur_ratio_IEF_SHY) - IEF,
+      vol_hedged = SHY * lag(vol_ratio_IEF_SHY) - IEF,
+      beta_hedged = SHY * lag(beta_ratio_IEF_SHY) - IEF,
+   ) |> 
+   drop_na() |>
+   # add the cumulative returns
+   mutate(
+      cum_equal_hedged = cumprod(1+equal_hedged),
+      cum_duration_hedged = cumprod(1+duration_hedged),
+      cum_vol_hedged = cumprod(1+vol_hedged),
+      cum_beta_hedged = cumprod(1+beta_hedged)
    )
+   
 
-# Plot cumulative returns
-values_hedged |>
-   select(date, equal_hedged_IEF) |>
+
+# plot hedged daily returns
+hedge_port_4y |> 
+   select(date, equal_hedged, duration_hedged, vol_hedged, beta_hedged) |>
+   pivot_longer(-date) |>
+   ggplot(aes(x = date, y = value, color = name,fill = name)) +
+   geom_col(position = "dodge") +
+   labs(title = "Hedged Returns",
+        x = "Date",
+        y = "Return") +
+   theme_minimal() +
+   scale_y_continuous(labels = scales::percent)
+
+# plot the cumulative returns
+hedge_port_4y |> 
+   select(date, cum_equal_hedged, cum_duration_hedged, cum_vol_hedged, cum_beta_hedged) |>
    pivot_longer(-date) |>
    ggplot(aes(x = date, y = value, color = name)) +
    geom_line() +
-   labs(title = "Cumulative Returns of Beta-Hedged SHY Positions",
+   geom_line(aes(x = date, y = T10Y2Y/500+1), data = filter(values_fred,date >= max(date)-years(4)), 
+             color = "black", linetype = "dashed", inherit.aes = FALSE) +
+   scale_y_continuous(sec.axis = sec_axis(~.*50-1, name = "10Y-2Y Spread")) +
+   
+   labs(title = "Cumulative Returns Long SHY Short IEF",
+        subtitle = "With Curve Shape",
         x = "Date",
         y = "Cumulative Return") +
-   theme_minimal() +
-   scale_y_continuous(labels = scales::percent)
+   theme_minimal()
 
 # plot rolling hedge ratios
-values_hedged |> 
-   select(date, hedge_ratio_IEF, duration_ratio_IEF) |>
-   pivot_longer(-date) |>
-   ggplot(aes(x = date, y = value, color = name)) +
-   geom_line() +
-   labs(title = "Rolling Hedge Ratios",
-        x = "Date",
-        y = "Hedge Ratio") +
-   theme_minimal() +
-   scale_y_continuous(labels = scales::percent)
 
-hr <- eff_dur_SHY / eff_dur_IEF
-hr <- .1
-values_hedged <- values_hedged |> 
-   mutate(px_ratio = SHY/IEF) |>
-   mutate(dur_ratio = SHY/(IEF * duration_ratio_IEF)) |>
-   mutate(vol_ratio = SHY/(IEF*vol_SHY/hedge_ratio_IEF)) |> 
-   # index all ratios to start at zero
-   mutate(px_ratio = px_ratio/first(px_ratio)-1,
-          dur_ratio = dur_ratio/first(dur_ratio)-1,
-          vol_ratio = vol_ratio/first(vol_ratio)-1
-          )
+x_text_pos <- max(hedged_port$date) - months(36)
 
-values_hedged|>
-   ggplot(aes(x = date)) +
-   geom_line(aes(y = px_ratio, color = "Hedge Ratio = 1:1")) +
-   geom_line(aes(y = dur_ratio, color = "Duration Hedge")) +
-   geom_line(aes(y = vol_ratio, color =  "Vol Hedge")) +
-   
-   labs(title = "Long SHY vs Short IEF",
-        x = "Date",
-        y = "Ratio",
-        color = "Legend") +
+hedged_port |> 
+   select(date, beta_ratio_IEF_SHY, vol_ratio_IEF_SHY) |>
+   pivot_longer(cols = c(beta_ratio_IEF_SHY, vol_ratio_IEF_SHY), 
+                names_to = "hedge_ratio", values_to = "value") |> 
+   ggplot() +
+   geom_line(aes(x = date, y = value, color = hedge_ratio)) +
+   scale_color_manual(values = palette()[3:5]) +
+   annotate("point", x = max(hedged_port$date), y = eff_dur_IEF/eff_dur_SHY, 
+            color = palette()[6], size = 4) +
+   annotate("text", x = x_text_pos, y = 12,
+            label = str_glue("Duration Ratio: {round(eff_dur_IEF/eff_dur_SHY,2)}"),
+            color = palette()[6], hjust = -.1, size = 5) +
+   annotate("text", x = x_text_pos, y = 10,
+            label = str_glue("Beta Ratio: {round(tail(hedged_port$beta_ratio_IEF_SHY,1),2)}"),
+            color = palette()[3], hjust = -.1, size = 5) +
+   annotate("text", x = x_text_pos, y = 8, 
+            label = str_glue("Vol Ratio: {round(tail(hedged_port$vol_ratio_IEF_SHY,1),2)}"),
+            color = palette()[4], hjust = -.1, size = 5) +
+   geom_line(aes(x = date, y = T10Y2Y/50), data = values_fred, 
+             color = "black", linetype = "dashed", inherit.aes = FALSE) +
+   scale_y_continuous(breaks = -1:20,sec.axis = sec_axis(~.*50, name = "10Y-2Y Spread")) +
+   # increase the  y-axis major tick mark size
+   labs(title = str_glue("{window}-Month Rolling Hedge Ratios SHY/IEF"),
+        x = "Date", 
+        y = "Hedge Ratio",
+        subtitle = "Duration ratio uses only most recent published number") +
    theme_minimal()
+
 
