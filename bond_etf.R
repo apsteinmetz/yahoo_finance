@@ -87,26 +87,19 @@ if (RELOAD) {
 
 # ggplot SHY close and adjusted prices
 prices_shy |>
-   # rescale both price_types to start at one
-   group_by(ticker, price_type) |>
-   mutate(price = price / first(price)) |>
-   # filter( ticker == "IEF") |>
-   ggplot(aes(x = date, y = price, color = price_type,fill = ticker)) +
-   labs(
-     title = "A Huge Part of Total Return is Income",
-     subtitle = "Closing Share Price and Dividend-Adjusted Price Rescaled to Start at 1",
-     x = "Date",
-     y = "Scaled Price"
-   ) +
-   geom_line() + 
-   facet_wrap(~ticker)
-
-# table of volatility, adjusted and close
-prices_shy |>
-   summarise(.by = c(ticker, price_type),
-     vol=sd(price)*sqrt(256)
-   )
-
+  # rescale both price_types to start at one
+  group_by(ticker, price_type) |>
+  mutate(price = price / first(price)) |>
+  # filter( ticker == "IEF") |>
+  ggplot(aes(x = date, y = price, color = price_type, fill = ticker)) +
+  labs(
+    title = "A Huge Part of Total Return is Income",
+    subtitle = "Closing Share Price and Dividend-Adjusted Price Rescaled to Start at 1",
+    x = "Date",
+    y = "Scaled Price"
+  ) +
+  geom_line() +
+  facet_wrap(~ticker)
 
 values_fred <- values_fred |>
   # trim to match earliest date in prices
@@ -119,15 +112,16 @@ values_fred <- values_fred |>
   mutate(T10Y2Y_chg = T10Y2Y - lag(T10Y2Y)) |>
   # convert all chg to integer
   mutate(across(ends_with("_chg"), ~ round(.x, 2))) |>
-  filter(date >= min(prices_shy_adj$date))
+  filter(date >= min(prices_shy$date))
 
 
 # create daily returns and volatility
 window <- 60 # rolling 3 month window
-returns <- prices_shy_adj |>
+returns <- prices_shy |>
+  filter(price_type == "adjusted") |> 
   arrange(date) |>
   # add daily returns
-  group_by(ticker,price_type) |>
+  group_by(ticker) |>
   mutate(daily_return = price / lag(price) - 1) |>
   mutate(log_daily_return = log(daily_return + 1)) |>
   drop_na() |>
@@ -151,6 +145,7 @@ returns <- prices_shy_adj |>
 window <- 24 # rolling month window
 period_scale <- 12^.5
 returns_monthly <- prices_shy |>
+  filter(price_type == "adjusted") |> 
   #find date in each month closest to the 1st day of that month
   mutate(month = floor_date(date, "month")) |>
   # find the first date in each month
@@ -158,7 +153,7 @@ returns_monthly <- prices_shy |>
   select(-month) |>
   arrange(date) |>
   # add monthly returns
-  group_by(ticker,price_type) |>
+  group_by(ticker) |>
   mutate(monthly_return = price / lag(price) - 1) |>
   mutate(log_monthly_return = log(monthly_return + 1)) |>
   drop_na() |>
@@ -183,8 +178,10 @@ returns_monthly <- prices_shy |>
 
 # pivot longer
 returns_long <- returns_monthly |>
-  pivot_longer(cols = -c(date, ticker), names_to = "item", values_to = "value")
+  pivot_longer(cols = -c(date, ticker,price_type), names_to = "item", values_to = "value")
+
 returns_wide <- returns_long |>
+  select(-price_type) |>
   pivot_wider(names_from = ticker, values_from = value)
 
 # function to pull a single item from a named list by name
@@ -195,14 +192,17 @@ pull_item <- function(x, name) {
 # compute Exponential GARCH volatility
 # GARCH weight current observations more heavily than past observations
 # in our series it doesn't make a big difference
-garch <- function(.ticker) {
+# Here's the fixed `garch` function:
+
+garch <- function(.ticker, .price_type = "adjusted") {
   # return stop with error if .ticker is not in ticker
   if (!.ticker %in% unique(returns_monthly$ticker)) {
     stop("Ticker not found in returns_monthly")
   }
-  returns_monthly |>
-    filter(ticker == .ticker) |>
-    select(date, log_monthly_return) |>
+  target_data <- returns_monthly |>
+    filter(ticker == .ticker, price_type == .price_type) |>
+    select(date, log_monthly_return)
+  target_data |>
     as.xts() |>
     garch_modelspec(
       model = 'egarch',
@@ -216,16 +216,17 @@ garch <- function(.ticker) {
     rename(garch_vol = value) |>
     mutate(garch_vol = garch_vol * period_scale) |>
     mutate(
-      .before = "garch_vol",
-      date = pull(filter(returns_monthly, ticker == .ticker), date)
+      date = target_data$date,
+      .before = "garch_vol"
     ) |>
-    mutate(.after = "date", ticker = .ticker) |>
-    # right_join(returns_monthly, by = c("date",ticker)) |>
+    mutate(ticker = .ticker) |>
     identity()
 }
 
-returns_monthly_g <- c("SHY", "TLT", "IEF") |>
-  map(garch) |>
+returns_monthly_g <- map2(
+    c("SHY", "TLT", "IEF"),
+    rep("adjusted", 3),
+    ~ garch(.x, .y)) |>
   bind_rows() |>
   # add garch volatility to returns_monthly
   right_join(returns_monthly, by = c("date", "ticker")) |>
@@ -236,7 +237,7 @@ returns_monthly_g |>
   ggplot(aes(x = date)) +
   geom_line(aes(y = vol, color = "Volatility"), linewidth = 1) +
   geom_line(aes(y = garch_vol, color = "GARCH Volatility"), linewidth = 1) +
-  facet_wrap(~ticker, scales = "free_y") +
+  facet_wrap(~ticker, scales = "fixed") +
   labs(
     title = "Rolling 24=Month Volatilites",
     subtitle = "Simple Volatility and E-GARCH Volatility",
@@ -251,10 +252,10 @@ returns_monthly_g |>
   theme(legend.position = "bottom")
 
 
-# compute average vol for the last 2 years
+# compute average vol for the last 4 years
 avg_vol <- returns_monthly_g |>
-  filter(date >= max(date) - years(2)) |>
-  group_by(ticker) |>
+  filter(date >= max(date) - years(4)) |>
+  group_by(ticker, price_type) |>
   summarise(
     avg_vol = mean(vol, na.rm = TRUE),
     avg_garch_vol = mean(garch_vol, na.rm = TRUE)
@@ -269,8 +270,13 @@ convexity_SHY <- 0.11
 convexity_IEF <- 0.59
 convexity_TLT <- 3.44
 
+# full period beta
+beta_SHY_TLT <- coef(lm(TLT ~ SHY, data = returns_wide))["SHY"]
+
+
 correlations <- returns_long |>
-  filter(item == "monthly_return") |>
+  filter(item == "monthly_return") |> 
+  select(-item, -price_type) |>
   pivot_wider(names_from = ticker, values_from = value) |>
   # add rolling correlation
   mutate(
@@ -430,7 +436,7 @@ hedged_port_4y_t <- hedged_port_4y |>
 # Here are the plotting functions moved to the bottom of the script ------------
 
 # plot price history
-plot_prices <- function(data = prices_shy_adj) {
+plot_prices <- function(data = prices_shy) {
   data |>
     ggplot(aes(x = date, y = price, color = ticker)) +
     geom_line() +
