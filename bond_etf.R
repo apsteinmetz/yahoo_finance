@@ -3,10 +3,14 @@ library(tidyverse)
 # library(tidyfit)
 library(quantmod)
 library(tsgarch)
+library(mFilter)
 
 # ------------------------------------------------------------------------------
 # download prices and combine into a list. Keep only the adjusted price.
 RELOAD = FALSE
+frequency <- "monthly"
+curve_color = "blue"
+
 if (RELOAD) {
   tickers = c('SHY', 'IEF', 'TLT')
   prices_raw <- tickers |>
@@ -21,7 +25,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    reduce(full_join, by = c("date", "ticker")) |>
+    curve_coloruce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -40,7 +44,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    reduce(full_join, by = c("date", "ticker")) |>
+    curve_coloruce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -56,7 +60,7 @@ if (RELOAD) {
 
   fred_codes <- c("DGS2", "DGS10", "T10Y2Y")
   fred_raw <- fred_codes |>
-    map(~ getSymbols(.x, src = "FRED", auto.assign = FALSE)) |>
+    map(~ getSymbols(.x, src = "fred_", auto.assign = FALSE)) |>
     map(as_tibble, rownames = "date")
 
   # convert the list of ticker prices to a single tidy data frame
@@ -67,7 +71,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    reduce(full_join, by = c("date", "ticker")) |>
+    curve_coloruce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -85,23 +89,7 @@ if (RELOAD) {
   load("data/prices_shy.RData")
 }
 
-# ggplot SHY close and adjusted prices
-prices_shy |>
-  # rescale both price_types to start at one
-  group_by(ticker, price_type) |>
-  mutate(price = price / first(price)) |>
-  # filter( ticker == "IEF") |>
-  ggplot(aes(x = date, y = price, color = price_type, fill = ticker)) +
-  labs(
-    title = "A Huge Part of Total Return is Income",
-    subtitle = "Closing Share Price and Dividend-Adjusted Price Rescaled to Start at 1",
-    x = "Date",
-    y = "Scaled Price"
-  ) +
-  geom_line() +
-  facet_wrap(~ticker)
-
-values_fred <- values_fred |>
+values_fred <- values_fred|>
   # trim to match earliest date in prices
   # rename to substitue "T" for "DGS"
   rename_with(~ str_replace(.x, "DGS", "T"), starts_with("DGS")) |>
@@ -117,18 +105,18 @@ values_fred <- values_fred |>
 
 # create daily returns and volatility
 window <- 60 # rolling 3 month window
-returns <- prices_shy |>
+returns_daily <- prices_shy |>
   filter(price_type == "adjusted") |> 
   arrange(date) |>
   # add daily returns
   group_by(ticker) |>
-  mutate(daily_return = price / lag(price) - 1) |>
-  mutate(log_daily_return = log(daily_return + 1)) |>
+  mutate(return = price / lag(price) - 1) |>
+  mutate(log_return = log(return + 1)) |>
   drop_na() |>
   # add sd of trailing 30-day daily returns
   mutate(
     vol = rollapply(
-      log_daily_return,
+      log_return,
       width = window,
       FUN = sd,
       fill = NA,
@@ -136,7 +124,7 @@ returns <- prices_shy |>
     )
   ) |>
   mutate(vol = vol * 250^.5) |>
-  mutate(value = cumprod(1 + daily_return)) |>
+  mutate(value = cumprod(1 + return)) |>
   # remove rows with NA in any column
   drop_na()
 
@@ -154,13 +142,13 @@ returns_monthly <- prices_shy |>
   arrange(date) |>
   # add monthly returns
   group_by(ticker) |>
-  mutate(monthly_return = price / lag(price) - 1) |>
-  mutate(log_monthly_return = log(monthly_return + 1)) |>
+  mutate(return = price / lag(price) - 1) |>
+  mutate(log_return = log(return + 1)) |>
   drop_na() |>
   # add sd of trailing 30-day monthly returns
   mutate(
     vol = rollapply(
-      log_monthly_return,
+      log_return,
       width = window,
       FUN = sd,
       fill = NA,
@@ -172,12 +160,21 @@ returns_monthly <- prices_shy |>
   drop_na() |>
   # make sure to accumlate value from start date of returns_monthly
   # after drop_na() so we start at 1
-  mutate(value = cumprod(1 + monthly_return)) |>
+  mutate(value = cumprod(1 + return)) |>
   ungroup() |>
   arrange(date)
 
+# chose daily or monthly returns
+if (frequency == "daily") {
+  returns <- returns_daily
+} else if (frequency == "monthly") {
+  returns <- returns_monthly
+} else {
+  stop("frequency must be 'daily' or 'monthly'")
+}
+
 # pivot longer
-returns_long <- returns_monthly |>
+returns_long <- returns |>
   pivot_longer(cols = -c(date, ticker,price_type), names_to = "item", values_to = "value")
 
 returns_wide <- returns_long |>
@@ -194,73 +191,55 @@ pull_item <- function(x, name) {
 # in our series it doesn't make a big difference
 # Here's the fixed `garch` function:
 
-garch <- function(.ticker, .price_type = "adjusted") {
-  # return stop with error if .ticker is not in ticker
-  if (!.ticker %in% unique(returns_monthly$ticker)) {
-    stop("Ticker not found in returns_monthly")
-  }
-  target_data <- returns_monthly |>
-    filter(ticker == .ticker, price_type == .price_type) |>
-    select(date, log_monthly_return)
-  target_data |>
+frequency <- "monthly" # monthly or daily
+if(frequency=="monthly") {
+  period_scale <- 12^.5
+  returns <- returns_monthly
+  hp_freq <- 12
+}else {
+  period_scale <- 252^.5 # scale for annualizing volatility
+  returns <- returns_daily
+  hp_freq <-252
+}
+
+garch <- function(date,log_ret){
+  hp_freq <- 12
+  tibble(date,log_ret) |>
     as.xts() |>
     garch_modelspec(
       model = 'egarch',
       constant = TRUE,
-      init = 'unconditional',
-      distribution = 'jsu'
+      distribution = 'std'
     ) |>
-    estimate() |>
-    pull_item("sigma") |>
+    estimate() |> 
+    pluck(sigma) |> 
+    # filter out single period spikes
+    hpfilter(freq=hp_freq) |> 
+    pluck("trend") |> 
     as_tibble() |>
-    rename(garch_vol = value) |>
-    mutate(garch_vol = garch_vol * period_scale) |>
-    mutate(
-      date = target_data$date,
-      .before = "garch_vol"
-    ) |>
-    mutate(ticker = .ticker) |>
-    identity()
+    mutate(.sigma = .sigma * period_scale) |>
+    pull(.sigma)
 }
 
-returns_monthly_g <- map2(
-    c("SHY", "TLT", "IEF"),
-    rep("adjusted", 3),
-    ~ garch(.x, .y)) |>
-  bind_rows() |>
-  # add garch volatility to returns_monthly
-  right_join(returns_monthly, by = c("date", "ticker")) |>
-  relocate(garch_vol, .after = vol)
-
-# plot vol and garch vol over time
-returns_monthly_g |>
-  ggplot(aes(x = date)) +
-  geom_line(aes(y = vol, color = "Volatility"), linewidth = 1) +
-  geom_line(aes(y = garch_vol, color = "GARCH Volatility"), linewidth = 1) +
-  facet_wrap(~ticker, scales = "fixed") +
-  labs(
-    title = "Rolling 24=Month Volatilites",
-    subtitle = "Simple Volatility and E-GARCH Volatility",
-    x = "Date",
-    y = "Volatility"
-  ) +
-  scale_y_continuous(labels = scales::percent) +
-  scale_color_manual(
-    values = c("Volatility" = "blue", "GARCH Volatility" = "red")
-  ) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-
+returns_g <- returns |> 
+  mutate(.by=ticker,garch_vol = garch(date, log_return))
 
 # compute average vol for the last 4 years
-avg_vol <- returns_monthly_g |>
+avg_vol <- returns_g |>
   filter(date >= max(date) - years(4)) |>
-  group_by(ticker, price_type) |>
-  summarise(
+  # group_by(ticker, price_type) |>
+  summarise(.by = c("ticker", "price_type"),
     avg_vol = mean(vol, na.rm = TRUE),
     avg_garch_vol = mean(garch_vol, na.rm = TRUE)
   ) |>
   ungroup()
+
+returns_long <- returns_g |>
+  pivot_longer(cols = -c(date, ticker,price_type), names_to = "item", values_to = "value")
+
+returns_wide <- returns_long |>
+  select(-price_type) |>
+  pivot_wider(names_from = ticker, values_from = value)
 
 # from Blackrock web site
 eff_dur_SHY <- 1.85
@@ -275,7 +254,7 @@ beta_SHY_TLT <- coef(lm(TLT ~ SHY, data = returns_wide))["SHY"]
 
 
 correlations <- returns_long |>
-  filter(item == "monthly_return") |> 
+  filter(item == "return") |> 
   select(-item, -price_type) |>
   pivot_wider(names_from = ticker, values_from = value) |>
   # add rolling correlation
@@ -295,62 +274,51 @@ correlations <- returns_long |>
 
 # rolling window hedge ratios for beta=based and volatility-based
 window = 24 # months
+
 beta_ratios <- returns_wide |>
-  filter(item == "monthly_return") |>
+  filter(item == "return") |>
   select(-item) |>
+  # mutate(month = floor_date(date, "month")) |>
   mutate(
-    beta_ratio_TLT_SHY = slider::slide_period_dbl(
+    beta_ratio_TLT_SHY = slider::slide_dbl(
       .x = tibble(TLT, SHY),
-      .i = date,
-      .period = "month",
-      .f = ~ coef(lm(TLT ~ SHY, data = as.data.frame(.x)))[2],
+      .f = ~ coef(lm(.x$TLT ~ .x$SHY))[2],
       .before = window - 1
-    )
-  ) |>
-  mutate(
-    beta_ratio_IEF_SHY = slider::slide_period_dbl(
+    ),
+    beta_ratio_IEF_SHY = slider::slide_dbl(
       .x = tibble(IEF, SHY),
-      .i = date,
-      .period = "month",
-      .f = ~ coef(lm(IEF ~ SHY, data = .x))[2],
+      .f = ~ coef(lm(.x$IEF ~ .x$SHY))[2],
+      .before = window - 1
+    ),
+    beta_ratio_TLT_IEF = slider::slide_dbl(
+      .x = tibble(TLT, IEF),
+      .f = ~ coef(lm(.x$TLT ~ .x$IEF))[2],
       .before = window - 1
     )
   ) |>
-  mutate(
-    beta_ratio_TLT_IEF = slider::slide_period_dbl(
-      .x = tibble(IEF, TLT),
-      .i = date,
-      .period = "month",
-      .f = ~ coef(lm(IEF ~ TLT, data = .x))[2],
-      .before = window - 1
-    )
-  ) |>
-  # add moving averages
   mutate(
     beta_ratio_TLT_SHY_ma = slider::slide_dbl(
-      .x = beta_ratio_TLT_SHY,
-      .i = date,
-      .f = ~ mean(.x, na.rm = TRUE),
-      .before = window - 1
-    )
-  ) |>
-  mutate(
+      beta_ratio_TLT_SHY,
+      .f = mean,
+      .before = window - 1,
+      na.rm = TRUE
+    ),
     beta_ratio_IEF_SHY_ma = slider::slide_dbl(
-      .x = beta_ratio_IEF_SHY,
-      .i = date,
-      .f = ~ mean(.x, na.rm = TRUE),
-      .before = window - 1
-    )
-  ) |>
-  mutate(
+      beta_ratio_IEF_SHY,
+      .f = mean,
+      .before = window - 1,
+      na.rm = TRUE
+    ),
     beta_ratio_TLT_IEF_ma = slider::slide_dbl(
-      .x = beta_ratio_TLT_IEF,
-      .i = date,
-      .f = ~ mean(.x, na.rm = TRUE),
-      .before = window - 1
+      beta_ratio_TLT_IEF,
+      .f = mean,
+      .before = window - 1,
+      na.rm = TRUE
     )
   ) |>
-  tail(-8) # omit first 5 observations with too few data points
+  tail(-5) |> 
+  # drop early observations with too few data points
+  drop_na()
 
 vol_ratios <- returns_wide |>
   filter(item == "vol") |>
@@ -386,12 +354,12 @@ vol_ratios <- returns_wide |>
     )
   ) |>
   # omit first 8 observations with too few data points
-  tail(-8) |>
+  tail(-5) |>
   drop_na()
 
 # focus on IEF/SHY
 hedged_port <- returns_wide |>
-  filter(item == "monthly_return") |>
+  filter(item == "return") |>
   select(-item, -TLT) |>
   left_join(select(beta_ratios, date, beta_ratio_IEF_SHY), by = "date") |>
   left_join(select(vol_ratios, date, vol_ratio_IEF_SHY), by = "date") |>
@@ -435,48 +403,91 @@ hedged_port_4y_t <- hedged_port_4y |>
 
 # Here are the plotting functions moved to the bottom of the script ------------
 
+# ggplot SHY close and adjusted prices
+plot_px_vs_tr <- function(){
+  prices_shy |>
+  # rescale both price_types to start at one
+  group_by(ticker, price_type) |>
+  mutate(price = price / first(price)) |>
+  # filter( ticker == "IEF") |>
+  ggplot(aes(x = date, y = price, color = price_type, fill = ticker)) +
+  labs(
+    title = "A Huge Part of Total Return is Income",
+    subtitle = "Closing Share Price and Dividend-Adjusted Price Rescaled to Start at 1",
+    x = "Date",
+    y = "Scaled Price"
+  ) +
+  geom_line() +
+  facet_wrap(~ticker)
+}
+plot_px_vs_tr()
+
 # plot price history
-plot_prices <- function(data = prices_shy) {
-  data |>
+plot_prices <- function(.data = prices_shy) {
+  .data |>
+    filter(price_type == "close") |>
+    group_by(ticker) |>
     ggplot(aes(x = date, y = price, color = ticker)) +
     geom_line() +
     labs(
       title = "Bond ETF Prices",
-      subtitle = "Adjusted for Dividend Payments",
+      # subtitle = "Adjusted for Dividend Payments",
       x = "Date",
-      y = "Price"
+      y = "ETF Closing Price"
     ) +
-    theme_minimal() +
     scale_y_continuous(labels = scales::dollar) +
     scale_x_date(date_labels = "%Y", date_breaks = "1 year")
 }
 plot_prices()
 
-plot_cumulative_returns <- function(data = returns_monthly) {
+plot_cumulative_returns <- function(data = returns) {
   data |>
     ggplot(aes(x = date, y = value, color = ticker)) +
     geom_line() +
     geom_hline(yintercept = 1, color = "black") +
     labs(title = "Cumulative Returns", x = "Date", y = "Value of $1.00") +
     #      theme_minimal() +
-    #      scale_color_manual(values = c("SHY" = "green", "IEF" = "blue", "TLT" = "red")) +
+    #      scale_color_manual(values = c("SHY" = "green", "IEF" = "blue", "TLT" = "curve_color")) +
     # currency y-scale
-    scale_y_continuous(labels = scales::dollar) +
+    scale_y_continuous(labels = scales::dollar,breaks = seq(.8, 2.1, by = 0.1)) +
     scale_x_date(date_labels = "%Y", date_breaks = "1 year")
 }
 plot_cumulative_returns()
 
-plot_rolling_volatility <- function(data = returns_monthly_g) {
+plot_garch_compare <- function(){
+  returns_g |> 
+    select(date,ticker,vol,garch_vol) |>
+    pivot_longer(
+      cols = c(-date, -ticker),
+      names_to = "vol_type",
+      values_to = "volatility"
+    ) |> 
+    group_by(ticker) |>
+    ggplot(aes(x = date, y = volatility, color = vol_type,fill = ticker)) +
+    geom_line() +
+    facet_wrap(~ticker, scales = "fixed") +
+    labs(
+      title = "GARCH Volatility of IEF",
+      subtitle = "Comparison of Historical and Smoothed GARCH Volatility",
+      x = "Date",
+      y = "Volatility"
+    ) +
+    scale_y_continuous(labels = scales::percent)
+}  
+
+plot_garch_compare()
+
+plot_rolling_volatility <- function(data = returns_g) {
   data |>
-    ggplot(aes(x = date, y = vol, color = ticker)) +
+    ggplot(aes(x = date, y = garch_vol, color = ticker)) +
     geom_line() +
     scale_y_continuous(labels = scales::percent) +
-    #       scale_color_manual(values = c("blue","green","red")) +
+    #       scale_color_manual(values = c("blue","green","curve_color")) +
     scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
     labs(
-      title = str_glue("{window}-Month Rolling Volatility"),
+      title = str_glue("{window}-Month Rolling GARCH Volatility"),
       x = "Date",
-      y = "Annualized Volatility"
+      y = "Annualized Smoothed Volatility"
     )
 }
 plot_rolling_volatility()
@@ -517,7 +528,7 @@ plot_regression_scatter <- function(data = hedged_port_4y) {
   data |>
     ggplot(aes(x = SHY, y = IEF)) +
     geom_point() +
-    geom_smooth(method = "lm", color = "red") +
+    geom_smooth(method = "lm", color = "curve_color") +
     labs(
       title = "SHY vs IEF",
       x = "SHY Monthly Return",
@@ -525,7 +536,7 @@ plot_regression_scatter <- function(data = hedged_port_4y) {
       subtitle = sprintf(
         "Beta: %.2f, R²: %.2f",
         coef(lm(IEF ~ SHY, data = data))[2],
-        summary(lm(IEF ~ SHY, data = data))$r.squared
+        summary(lm(IEF ~ SHY, data = data))$r.squacurve_color
       )
     ) +
     theme_minimal() +
@@ -564,7 +575,7 @@ plot_hedged_returns_scatter <- function(data = hedged_port_4y_t) {
 }
 plot_hedged_returns_scatter()
 
-plot_hedged_daily_returns <- function(data = hedged_port_4y) {
+plot_hedged_returns <- function(data = hedged_port_4y) {
   data |>
     select(date, equal_hedged, duration_hedged, vol_hedged, beta_hedged) |>
     pivot_longer(-date) |>
@@ -580,7 +591,7 @@ plot_hedged_daily_returns <- function(data = hedged_port_4y) {
     scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
     scale_y_continuous(labels = scales::percent)
 }
-plot_hedged_daily_returns()
+plot_hedged_returns()
 
 plot_hedge_ratios <- function(data = hedged_port_4y, x_text_pos, y_text_pos) {
   x_text_pos <- max(hedged_port$date) - months(8)
@@ -637,7 +648,7 @@ plot_hedge_ratios <- function(data = hedged_port_4y, x_text_pos, y_text_pos) {
     geom_line(
       aes(x = date, y = T10Y2Y / 50 + 4),
       data = filter(values_fred, date >= min(hedged_port_4y$date)),
-      color = "red",
+      color = "curve_color",
       linetype = "dashed",
       inherit.aes = FALSE
     ) +
@@ -659,8 +670,8 @@ plot_hedge_ratios <- function(data = hedged_port_4y, x_text_pos, y_text_pos) {
       subtitle = "Note: Duration ratio uses only most recent published number"
     ) +
     theme(
-      axis.title.y.right = element_text(color = "red"),
-      axis.text.y.right = element_text(color = "red")
+      axis.title.y.right = element_text(color = "curve_color"),
+      axis.text.y.right = element_text(color = "curve_color")
     )
 }
 plot_hedge_ratios()
@@ -680,8 +691,9 @@ plot_cumulative_hedged_returns <- function(data = hedged_port_4y) {
     geom_line(
       aes(x = date, y = T10Y2Y / 1000 + 1),
       data = filter(values_fred, date >= max(date) - years(4)),
-      color = "red",
+      color = "curve_color",
       linetype = "dashed",
+      linewidth = 1,
       inherit.aes = FALSE
     ) +
     scale_y_continuous(
@@ -695,8 +707,8 @@ plot_cumulative_hedged_returns <- function(data = hedged_port_4y) {
     ) +
     scale_x_date(date_labels = "%Y %b", date_breaks = "6 months") +
     theme(
-      axis.title.y.right = element_text(color = "red"),
-      axis.text.y.right = element_text(color = "red")
+      axis.title.y.right = element_text(color = "curve_color"),
+      axis.text.y.right = element_text(color = "curve_color")
     ) +
     geom_hline(yintercept = 1, linetype = "dashed", color = "black") +
     annotate(
@@ -743,3 +755,4 @@ plot_cumulative_hedged_returns <- function(data = hedged_port_4y) {
     )
 }
 plot_cumulative_hedged_returns(hedged_port_4y)
+
