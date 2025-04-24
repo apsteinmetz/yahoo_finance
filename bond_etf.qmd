@@ -9,14 +9,6 @@ execute:
 
 ---
 
-## Quarto
-
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-
-## Running Code
-
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-
 ```{r setup, echo=FALSE}
 # fixed income etf hedging
 library(tidyverse)
@@ -222,39 +214,17 @@ if(frequency=="monthly") {
   hp_freq <-252
 }
 
-garch <- function(date,log_ret){
-  hp_freq <- 12
-  tibble(date,log_ret) |>
-    as.xts() |>
-    garch_modelspec(
-      model = 'egarch',
-      constant = TRUE,
-      distribution = 'std'
-    ) |>
-    estimate() |> 
-    pluck(sigma) |> 
-    # filter out single period spikes
-    hpfilter(freq=hp_freq) |> 
-    pluck("trend") |> 
-    as_tibble() |>
-    mutate(.sigma = .sigma * period_scale) |>
-    pull(.sigma)
-}
-
-returns_g <- returns |> 
-  mutate(.by=ticker,garch_vol = garch(date, log_return))
 
 # compute average vol for the last 4 years
-avg_vol <- returns_g |>
+avg_vol <- returns |>
   filter(date >= max(date) - years(4)) |>
   # group_by(ticker, price_type) |>
   summarise(.by = c("ticker", "price_type"),
-    avg_vol = mean(vol, na.rm = TRUE),
-    avg_garch_vol = mean(garch_vol, na.rm = TRUE)
+    avg_vol = mean(vol, na.rm = TRUE)
   ) |>
   ungroup()
 
-returns_long <- returns_g |>
+returns_long <- returns |>
   pivot_longer(cols = -c(date, ticker,price_type), names_to = "item", values_to = "value")
 
 returns_wide <- returns_long |>
@@ -422,7 +392,39 @@ hedged_port_4y_t <- hedged_port_4y |>
   )
 
 ```
-Here are the plotting functions moved to the bottom of the script ------------
+## Constructing Yield Curve trades with ETFs
+
+In this note we explore how to construct yield curve trades using bond ETFs. We will use the iShares 1-3 Year Treasury Bond ETF (SHY), the iShares 7-10 Year Treasury Bond ETF (IEF), and the iShares 20+ Year Treasury Bond ETF (TLT). We will look at the historical prices, returns, and volatility of these ETFs, and then construct a hedged portfolio using different hedge ratios based on duration, beta and volatility.
+
+A key goal of any spread trade, or any trade at all, is not make any unintended side bets.  We want to isolate the yield curve trade and not have any exposure to the general movement in interest rates.  For this trade is means looking at the price movement of our ETF's relative to each other over a periods of both curve steepening and flattening and relative to equal yield moves.
+
+We can download the closing and "adjusted" prices of these ETFs from Yahoo Finance. "Adjusted" means dividends are include so we can calculate the total return. We get yield curve data the Federal Reserve Economic Data (FRED) database.
+
+Let's explore the properties of the ETFs and the yield curve data.
+
+```{r # plot price history}
+# plot price history
+plot_prices <- function(.data = prices_shy) {
+  .data |>
+    filter(price_type == "close") |>
+    group_by(ticker) |>
+    ggplot(aes(x = date, y = price, color = ticker)) +
+    geom_line() +
+    labs(
+      title = "Bond ETF Prices",
+      # subtitle = "Adjusted for Dividend Payments",
+      x = "Date",
+      y = "ETF Closing Price"
+    ) +
+    scale_y_continuous(labels = scales::dollar) +
+    scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+}
+plot_prices()
+```
+SHY is the iShares 1-3 Year Treasury Bond ETF, IEF is the iShares 7-10 Year Treasury Bond ETF, and TLT is the iShares 20+ Year Treasury Bond ETF. You can see how the longer maturity ETFs (IEF and TLT) have much more price volatility, though they are correlated.
+
+At first glance the "round trip" the prices makes suggest own them over this period was not a good idea. But the chart above uses closing prices. Let's look at the cumulative returns using the adjusted prices, which include dividends.
+
 ```{r ggplot SHY close and adjusted prices}
 
 plot_px_vs_tr <- function(){
@@ -444,26 +446,12 @@ plot_px_vs_tr <- function(){
 plot_px_vs_tr()
 ```
 
+That's better. The reward for higher volatility is more income and, over this period, better return. The relationship is inverted when the yield curve inverts.
 
-```{r # plot price history}
-# plot price history
-plot_prices <- function(.data = prices_shy) {
-  .data |>
-    filter(price_type == "close") |>
-    group_by(ticker) |>
-    ggplot(aes(x = date, y = price, color = ticker)) +
-    geom_line() +
-    labs(
-      title = "Bond ETF Prices",
-      # subtitle = "Adjusted for Dividend Payments",
-      x = "Date",
-      y = "ETF Closing Price"
-    ) +
-    scale_y_continuous(labels = scales::dollar) +
-    scale_x_date(date_labels = "%Y", date_breaks = "1 year")
-}
-plot_prices()
-```
+
+Here are the plotting functions moved to the bottom of the script ------------
+
+
 
 
 ```{r # plot cum returns}
@@ -483,34 +471,10 @@ plot_cumulative_returns()
 ```
 
 
-```{r # plot garch}
-plot_garch_compare <- function(){
-  returns_g |> 
-    select(date,ticker,vol,garch_vol) |>
-    pivot_longer(
-      cols = c(-date, -ticker),
-      names_to = "vol_type",
-      values_to = "volatility"
-    ) |> 
-    group_by(ticker) |>
-    ggplot(aes(x = date, y = volatility, color = vol_type,fill = ticker)) +
-    geom_line() +
-    facet_wrap(~ticker, scales = "fixed") +
-    labs(
-      title = "GARCH Volatility of IEF",
-      subtitle = "Comparison of Historical and Smoothed GARCH Volatility",
-      x = "Date",
-      y = "Volatility"
-    ) +
-    scale_y_continuous(labels = scales::percent)
-}  
-
-plot_garch_compare()
-```
 
 
 ```{r # plot rolling vol}
-plot_rolling_volatility <- function(data = returns_g) {
+plot_rolling_volatility <- function(data = returns) {
   data |>
     ggplot(aes(x = date, y = garch_vol, color = ticker)) +
     geom_line() +
