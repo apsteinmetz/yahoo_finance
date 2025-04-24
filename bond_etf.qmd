@@ -37,7 +37,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    curve_coloruce(full_join, by = c("date", "ticker")) |>
+    reduce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -56,7 +56,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    redruce(full_join, by = c("date", "ticker")) |>
+    reduce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -72,7 +72,7 @@ if (RELOAD) {
 
   fred_codes <- c("DGS2", "DGS10", "T10Y2Y")
   fred_raw <- fred_codes |>
-    map(~ getSymbols(.x, src = "fred_", auto.assign = FALSE)) |>
+    map(~ getSymbols(.x, src = "FRED", auto.assign = FALSE)) |>
     map(as_tibble, rownames = "date")
 
   # convert the list of ticker prices to a single tidy data frame
@@ -476,13 +476,13 @@ plot_cumulative_returns()
 ```{r # plot rolling vol}
 plot_rolling_volatility <- function(data = returns) {
   data |>
-    ggplot(aes(x = date, y = garch_vol, color = ticker)) +
+    ggplot(aes(x = date, y = vol, color = ticker)) +
     geom_line() +
     scale_y_continuous(labels = scales::percent) +
     #       scale_color_manual(values = c("blue","green","red")) +
     scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
     labs(
-      title = str_glue("{window}-Month Rolling GARCH Volatility"),
+      title = str_glue("{window}-Month Rolling Volatility"),
       x = "Date",
       y = "Annualized Smoothed Volatility"
     )
