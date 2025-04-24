@@ -44,7 +44,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    curve_coloruce(full_join, by = c("date", "ticker")) |>
+    redruce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -71,7 +71,7 @@ if (RELOAD) {
     # convert date string to date type
     map(~ mutate(.x, date = as.Date(date))) |>
     # combine the list of data frames into one
-    curve_coloruce(full_join, by = c("date", "ticker")) |>
+    reduce(full_join, by = c("date", "ticker")) |>
     pivot_longer(
       cols = -c(date, ticker),
       names_to = "type",
@@ -447,7 +447,7 @@ plot_cumulative_returns <- function(data = returns) {
     geom_hline(yintercept = 1, color = "black") +
     labs(title = "Cumulative Returns", x = "Date", y = "Value of $1.00") +
     #      theme_minimal() +
-    #      scale_color_manual(values = c("SHY" = "green", "IEF" = "blue", "TLT" = "curve_color")) +
+    #      scale_color_manual(values = c("SHY" = "green", "IEF" = "blue", "TLT" = "red")) +
     # currency y-scale
     scale_y_continuous(labels = scales::dollar,breaks = seq(.8, 2.1, by = 0.1)) +
     scale_x_date(date_labels = "%Y", date_breaks = "1 year")
@@ -482,7 +482,7 @@ plot_rolling_volatility <- function(data = returns_g) {
     ggplot(aes(x = date, y = garch_vol, color = ticker)) +
     geom_line() +
     scale_y_continuous(labels = scales::percent) +
-    #       scale_color_manual(values = c("blue","green","curve_color")) +
+    #       scale_color_manual(values = c("blue","green","red")) +
     scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
     labs(
       title = str_glue("{window}-Month Rolling GARCH Volatility"),
@@ -528,7 +528,7 @@ plot_regression_scatter <- function(data = hedged_port_4y) {
   data |>
     ggplot(aes(x = SHY, y = IEF)) +
     geom_point() +
-    geom_smooth(method = "lm", color = "curve_color") +
+    geom_smooth(method = "lm", color = curve_color) +
     labs(
       title = "SHY vs IEF",
       x = "SHY Monthly Return",
@@ -536,7 +536,7 @@ plot_regression_scatter <- function(data = hedged_port_4y) {
       subtitle = sprintf(
         "Beta: %.2f, R²: %.2f",
         coef(lm(IEF ~ SHY, data = data))[2],
-        summary(lm(IEF ~ SHY, data = data))$r.squacurve_color
+        summary(lm(IEF ~ SHY, data = data))$r.squared
       )
     ) +
     theme_minimal() +
@@ -648,7 +648,7 @@ plot_hedge_ratios <- function(data = hedged_port_4y, x_text_pos, y_text_pos) {
     geom_line(
       aes(x = date, y = T10Y2Y / 50 + 4),
       data = filter(values_fred, date >= min(hedged_port_4y$date)),
-      color = "curve_color",
+      color = curve_color,
       linetype = "dashed",
       inherit.aes = FALSE
     ) +
@@ -670,8 +670,8 @@ plot_hedge_ratios <- function(data = hedged_port_4y, x_text_pos, y_text_pos) {
       subtitle = "Note: Duration ratio uses only most recent published number"
     ) +
     theme(
-      axis.title.y.right = element_text(color = "curve_color"),
-      axis.text.y.right = element_text(color = "curve_color")
+      axis.title.y.right = element_text(color = curve_color),
+      axis.text.y.right = element_text(color = curve_color)
     )
 }
 plot_hedge_ratios()
@@ -691,7 +691,7 @@ plot_cumulative_hedged_returns <- function(data = hedged_port_4y) {
     geom_line(
       aes(x = date, y = T10Y2Y / 1000 + 1),
       data = filter(values_fred, date >= max(date) - years(4)),
-      color = "curve_color",
+      color = curve_color,
       linetype = "dashed",
       linewidth = 1,
       inherit.aes = FALSE
@@ -707,8 +707,8 @@ plot_cumulative_hedged_returns <- function(data = hedged_port_4y) {
     ) +
     scale_x_date(date_labels = "%Y %b", date_breaks = "6 months") +
     theme(
-      axis.title.y.right = element_text(color = "curve_color"),
-      axis.text.y.right = element_text(color = "curve_color")
+      axis.title.y.right = element_text(color = curve_color),
+      axis.text.y.right = element_text(color = curve_color)
     ) +
     geom_hline(yintercept = 1, linetype = "dashed", color = "black") +
     annotate(
